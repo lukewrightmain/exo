@@ -7,11 +7,14 @@ from loguru import logger
 
 from exo.master.placement_utils import (
     filter_cycles_by_memory,
+    get_hosts_for_llamacpp,
     get_hosts_from_subgraph,
     get_mlx_ibv_coordinators,
     get_mlx_ibv_devices_matrix,
+    get_rpc_ports_for_llamacpp,
     get_shard_assignments,
     get_smallest_cycles,
+    get_tensor_split_for_llamacpp,
 )
 from exo.shared.topology import Topology
 from exo.shared.types.commands import (
@@ -19,7 +22,7 @@ from exo.shared.types.commands import (
     DeleteInstance,
     PlaceInstance,
 )
-from exo.shared.types.common import Host
+from exo.shared.types.common import Host, NodeId
 from exo.shared.types.events import Event, InstanceCreated, InstanceDeleted
 from exo.shared.types.memory import Memory
 from exo.shared.types.topology import NodeInfo
@@ -52,11 +55,20 @@ def place_instance(
     command: PlaceInstance,
     topology: Topology,
     current_instances: Mapping[InstanceId, Instance],
+    master_node_id: NodeId | None = None,
 ) -> dict[InstanceId, Instance]:
+    """
+    Place an instance on the topology.
+
+    For llama.cpp instances, the master_node_id should be provided to ensure
+    the EXO master node becomes device_rank=0 (runs llama-server with --rpc
+    to connect to worker rpc-servers). This aligns the EXO orchestration
+    master with the llama.cpp inference master.
+    """
     all_nodes = list(topology.list_nodes())
 
     logger.info("finding cycles:")
-    cycles = topology.get_cycles()
+    cycles = topology.get_cycles(preferred_first=master_node_id)
     singleton_cycles = [[node] for node in all_nodes]
     candidate_cycles = list(
         filter(lambda it: len(it) >= command.min_nodes, cycles + singleton_cycles)
@@ -143,17 +155,25 @@ def place_instance(
                 ],
             )
         case InstanceMeta.LlamaCpp:
-            hosts = get_hosts_from_subgraph(cycle_digraph)
+            rpc_ports = get_rpc_ports_for_llamacpp(selected_cycle)
+            tensor_split = get_tensor_split_for_llamacpp(selected_cycle)
+            
+            # Use specialized function for llama.cpp that finds external IPs
+            llamacpp_hosts = get_hosts_for_llamacpp(selected_cycle, cycle_digraph)
+
+            if len(selected_cycle) > 1:
+                logger.info(
+                    f"LlamaCpp distributed instance: {len(selected_cycle)} nodes, "
+                    f"tensor_split={tensor_split}, "
+                    f"hosts={[(h.ip, h.port) for h in llamacpp_hosts]}"
+                )
+
             target_instances[instance_id] = LlamaCppInstance(
                 instance_id=instance_id,
                 shard_assignments=shard_assignments,
-                hosts=[
-                    Host(
-                        ip=host.ip,
-                        port=random_ephemeral_port(),
-                    )
-                    for host in hosts
-                ],
+                hosts=llamacpp_hosts,
+                rpc_ports=rpc_ports,
+                tensor_split=tensor_split,
             )
 
     return target_instances
