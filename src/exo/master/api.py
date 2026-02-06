@@ -198,8 +198,8 @@ class API:
     async def get_placement(
         self,
         model_id: str,
-        sharding: Sharding = Sharding.Pipeline,
-        instance_meta: InstanceMeta = InstanceMeta.MlxRing,
+        sharding: Sharding = Sharding.Tensor,
+        instance_meta: InstanceMeta = InstanceMeta.LlamaCpp,
         min_nodes: int = 1,
     ) -> Instance:
         model_meta = await resolve_model_meta(model_id)
@@ -244,8 +244,8 @@ class API:
             raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
         instance_combinations: list[tuple[Sharding, InstanceMeta, int]] = []
-        for sharding in (Sharding.Pipeline, Sharding.Tensor):
-            for instance_meta in (InstanceMeta.MlxRing, InstanceMeta.MlxJaccl, InstanceMeta.LlamaCpp):
+        for sharding in (Sharding.Tensor,):
+            for instance_meta in (InstanceMeta.LlamaCpp,):
                 instance_combinations.extend(
                     [
                         (sharding, instance_meta, i)

@@ -42,7 +42,7 @@ const debugEnabled = $derived(debugMode());
 
 	// Instance launch state
 	let models = $state<Array<{id: string, name?: string, storage_size_megabytes?: number}>>([]);
-	let selectedSharding = $state<'Pipeline' | 'Tensor'>('Pipeline');
+	let selectedSharding = $state<'Tensor'>('Tensor');
 	type InstanceMeta = 'MlxRing' | 'MlxIbv' | 'MlxJaccl' | 'LlamaCpp';
 	
 	// Default to LlamaCpp for Android-only builds (MLX disabled)
@@ -1441,29 +1441,15 @@ function toggleInstanceDownloadDetails(nodeId: string): void {
 						
 						<!-- Configuration Options -->
 						<div class="flex-shrink-0 mb-4 space-y-3">
-							<!-- Sharding -->
+							<!-- Sharding (Tensor only for llama.cpp / Android) -->
 							<div>
 								<div class="text-xs text-white/70 font-mono mb-2">Sharding:</div>
 								<div class="flex gap-2">
 									<button 
-										onclick={() => selectedSharding = 'Pipeline'}
-										class="flex items-center gap-2 py-2 px-4 text-sm font-mono border rounded-full transition-all duration-200 cursor-pointer {selectedSharding === 'Pipeline' ? 'bg-[#60a5fa]/15 text-[#60a5fa] border-[#60a5fa]/40 shadow-[0_0_10px_rgba(96,165,250,0.2)]' : 'bg-transparent text-white/70 border-white/10 hover:border-white/20 hover:text-[#d1d5db]'}"
+										class="flex items-center gap-2 py-2 px-4 text-sm font-mono border rounded-full bg-[#60a5fa]/15 text-[#60a5fa] border-[#60a5fa]/40 shadow-[0_0_10px_rgba(96,165,250,0.2)]"
 									>
-										<span class="w-4 h-4 rounded-full border-2 flex items-center justify-center {selectedSharding === 'Pipeline' ? 'border-[#60a5fa]' : 'border-[#1e293b]'}">
-											{#if selectedSharding === 'Pipeline'}
-												<span class="w-2 h-2 rounded-full bg-[#60a5fa]"></span>
-											{/if}
-										</span>
-										Pipeline
-									</button>
-									<button 
-										onclick={() => selectedSharding = 'Tensor'}
-										class="flex items-center gap-2 py-2 px-4 text-sm font-mono border rounded-full transition-all duration-200 cursor-pointer {selectedSharding === 'Tensor' ? 'bg-[#60a5fa]/15 text-[#60a5fa] border-[#60a5fa]/40 shadow-[0_0_10px_rgba(96,165,250,0.2)]' : 'bg-transparent text-white/70 border-white/10 hover:border-white/20 hover:text-[#d1d5db]'}"
-									>
-										<span class="w-4 h-4 rounded-full border-2 flex items-center justify-center {selectedSharding === 'Tensor' ? 'border-[#60a5fa]' : 'border-[#1e293b]'}">
-											{#if selectedSharding === 'Tensor'}
-												<span class="w-2 h-2 rounded-full bg-[#60a5fa]"></span>
-											{/if}
+										<span class="w-4 h-4 rounded-full border-2 flex items-center justify-center border-[#60a5fa]">
+											<span class="w-2 h-2 rounded-full bg-[#60a5fa]"></span>
 										</span>
 										Tensor
 									</button>

@@ -14,7 +14,7 @@ interface Props {
 		}>;
 		} | null;
 		nodes?: Record<string, NodeInfo>;
-		sharding?: 'Pipeline' | 'Tensor';
+		sharding?: 'Tensor';
 		runtime?: 'MlxRing' | 'MlxIbv' | 'MlxJaccl' | 'LlamaCpp';
 		onLaunch?: () => void;
 		tags?: string[];
@@ -27,7 +27,7 @@ interface Props {
 		isLaunching = false, 
 		downloadStatus = null, 
 		nodes = {},
-		sharding = 'Pipeline',
+		sharding = 'Tensor',
 		runtime = 'MlxRing',
 		onLaunch,
 		tags = [],

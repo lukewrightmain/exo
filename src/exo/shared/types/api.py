@@ -137,8 +137,8 @@ class ChatCompletionTaskParams(BaseModel):
 
 class PlaceInstanceParams(BaseModel):
     model_id: str
-    sharding: Sharding = Sharding.Pipeline
-    instance_meta: InstanceMeta = InstanceMeta.MlxRing
+    sharding: Sharding = Sharding.Tensor
+    instance_meta: InstanceMeta = InstanceMeta.LlamaCpp
     min_nodes: int = 1
 
     @field_validator("sharding", "instance_meta", mode="plain")
