@@ -40,6 +40,7 @@ from exo.shared.types.tasks import (
     TaskStatus,
 )
 from exo.shared.types.worker.instances import InstanceId
+from exo.shared.types.worker.runners import RunnerReady, RunnerRunning
 from exo.utils.channels import Receiver, Sender, channel
 from exo.utils.event_buffer import MultiSourceBuffer
 
@@ -109,20 +110,32 @@ class Master:
                             for instance in self.state.instances.values():
                                 if (
                                     instance.shard_assignments.model_id
-                                    == command.request_params.model
+                                    != command.request_params.model
                                 ):
-                                    task_count = sum(
-                                        1
-                                        for task in self.state.tasks.values()
-                                        if task.instance_id == instance.instance_id
+                                    continue
+
+                                all_runners_ready = all(
+                                    isinstance(
+                                        self.state.runners.get(runner_id),
+                                        (RunnerReady, RunnerRunning),
                                     )
-                                    instance_task_counts[instance.instance_id] = (
-                                        task_count
-                                    )
+                                    for runner_id in instance.shard_assignments.runner_to_shard
+                                )
+                                if not all_runners_ready:
+                                    continue
+
+                                task_count = sum(
+                                    1
+                                    for task in self.state.tasks.values()
+                                    if task.instance_id == instance.instance_id
+                                )
+                                instance_task_counts[instance.instance_id] = (
+                                    task_count
+                                )
 
                             if not instance_task_counts:
                                 raise ValueError(
-                                    f"No instance found for model {command.request_params.model}"
+                                    f"No ready instance found for model {command.request_params.model}"
                                 )
 
                             available_instance_ids = sorted(
@@ -175,17 +188,13 @@ class Master:
                             )
                             generated_events.extend(transition_events)
                         case TaskFinished():
-                            generated_events.append(
-                                TaskDeleted(
-                                    task_id=self.command_task_mapping[
-                                        command.finished_command_id
-                                    ]
-                                )
+                            task_id = self.command_task_mapping.pop(
+                                command.finished_command_id, None
                             )
-                            if command.finished_command_id in self.command_task_mapping:
-                                del self.command_task_mapping[
-                                    command.finished_command_id
-                                ]
+                            if task_id is not None:
+                                generated_events.append(
+                                    TaskDeleted(task_id=task_id)
+                                )
                         case RequestEventLog():
                             # We should just be able to send everything, since other buffers will ignore old messages
                             for i in range(command.since_idx, len(self._event_log)):
@@ -194,7 +203,7 @@ class Master:
                                 )
                     for event in generated_events:
                         await self.event_sender.send(event)
-                except ValueError as e:
+                except Exception as e:
                     logger.opt(exception=e).warning("Error in command processor")
 
     # These plan loops are the cracks showing in our event sourcing architecture - more things could be commands

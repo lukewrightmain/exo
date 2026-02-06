@@ -50,6 +50,7 @@ from exo.shared.types.models import ModelId, ModelMetadata
 from exo.shared.types.state import State
 from exo.shared.types.tasks import ChatCompletionTaskParams
 from exo.shared.types.worker.instances import Instance, InstanceId, InstanceMeta
+from exo.shared.types.worker.runners import RunnerReady, RunnerRunning
 from exo.shared.types.worker.shards import Sharding
 from exo.utils.banner import print_startup_banner
 from exo.utils.channels import Receiver, Sender, channel
@@ -410,13 +411,32 @@ class API:
         model_meta = await resolve_model_meta(payload.model)
         payload.model = model_meta.model_id
 
-        if not any(
-            instance.shard_assignments.model_id == payload.model
-            for instance in self.state.instances.values()
-        ):
+        has_instance = False
+        has_ready_instance = False
+        for instance in self.state.instances.values():
+            if instance.shard_assignments.model_id != payload.model:
+                continue
+            has_instance = True
+            if all(
+                isinstance(
+                    self.state.runners.get(runner_id),
+                    (RunnerReady, RunnerRunning),
+                )
+                for runner_id in instance.shard_assignments.runner_to_shard
+            ):
+                has_ready_instance = True
+                break
+
+        if not has_instance:
             await self._trigger_notify_user_to_download_model(payload.model)
             raise HTTPException(
                 status_code=404, detail=f"No instance found for model {payload.model}"
+            )
+
+        if not has_ready_instance:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Instance for model {payload.model} exists but is not ready yet. Please wait for all runners to finish loading.",
             )
 
         command = ChatCompletion(
