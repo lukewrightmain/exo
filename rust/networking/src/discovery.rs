@@ -34,8 +34,8 @@ mod managed {
 
     const MDNS_RECORD_TTL: Duration = Duration::from_secs(2_500);
     const MDNS_QUERY_INTERVAL: Duration = Duration::from_secs(1_500);
-    const PING_TIMEOUT: Duration = Duration::from_millis(2_500);
-    const PING_INTERVAL: Duration = Duration::from_millis(2_500);
+    const PING_TIMEOUT: Duration = Duration::from_millis(30_000);
+    const PING_INTERVAL: Duration = Duration::from_millis(15_000);
 
     /// Environment variable to disable mDNS discovery (useful for proot/container environments)
     pub const EXO_DISABLE_MDNS_ENV_VAR: &str = "EXO_DISABLE_MDNS";
