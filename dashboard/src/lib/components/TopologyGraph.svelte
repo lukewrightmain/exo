@@ -720,7 +720,7 @@ function wrapLine(text: string, maxLen: number): string[] {
 
 			} else {
 				// Default/Unknown - phone-shaped rounded rectangle with memory fill
-				iconBaseWidth = nodeRadius * 0.9;
+				iconBaseWidth = nodeRadius * 0.65;
 				iconBaseHeight = nodeRadius * 1.3;
 				const phoneX = nodeInfo.x - iconBaseWidth / 2;
 				const phoneY = nodeInfo.y - iconBaseHeight / 2;
