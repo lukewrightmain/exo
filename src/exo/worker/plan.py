@@ -183,11 +183,13 @@ def _ready_to_warmup(
         assert device_rank < world_size
         assert device_rank >= 0
 
-        # Rank != n-1
+        # Rank != n-1: also accept RunnerReady since RPC workers warm up
+        # nearly instantly and may already be RunnerReady before the master
+        # finishes loading the model.
         accepting_ranks_ready = device_rank != world_size - 1 and all(
             isinstance(
                 all_runners.get(global_runner_id, None),
-                (RunnerLoaded, RunnerWarmingUp),
+                (RunnerLoaded, RunnerWarmingUp, RunnerReady),
             )
             for global_runner_id in shard_assignments.runner_to_shard
         )
