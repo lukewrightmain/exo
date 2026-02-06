@@ -225,11 +225,28 @@ def _run_llamacpp_runner(
 ) -> None:
     """Run the llama.cpp-based inference loop."""
     from exo.worker.engines.llamacpp.utils import (
+        get_gguf_path_for_instance,
         initialize_llamacpp,
+        initialize_llamacpp_distributed,
+        is_distributed_instance,
         use_native_cli,
         use_server_mode,
-        get_gguf_path_for_instance,
     )
+
+    device_rank = shard_metadata.device_rank
+    world_size = shard_metadata.world_size
+    is_distributed = is_distributed_instance(bound_instance)
+
+    if is_distributed and world_size > 1:
+        if device_rank > 0:
+            _run_llamacpp_worker(
+                bound_instance, event_sender, task_receiver, runner_id, shard_metadata, setup_start_time
+            )
+        else:
+            _run_llamacpp_master(
+                bound_instance, event_sender, task_receiver, runner_id, shard_metadata, setup_start_time
+            )
+        return
 
     model: Any = None
     is_native = use_native_cli()
@@ -346,6 +363,312 @@ def _run_llamacpp_runner(
                     raise ValueError("Received task outside of state machine")
 
             event_sender.send(TaskStatusUpdated(task_id=task.task_id, task_status=TaskStatus.Complete))
+
+    event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=RunnerShutdown()))
+
+
+def _get_external_ips() -> list[str]:
+    """Get external (non-loopback) IP addresses for this device.
+    
+    Uses ifconfig on Android/Termux (ip command doesn't work there).
+    Falls back to ip command on other platforms.
+    """
+    import re
+    import subprocess
+    
+    external_ips: list[str] = []
+    
+    # Try ifconfig first (works on Android/Termux)
+    try:
+        result = subprocess.run(
+            ["ifconfig"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            # Parse "inet x.x.x.x" or "inet addr:x.x.x.x"
+            for line in result.stdout.split('\n'):
+                if 'inet ' in line and 'inet6' not in line:
+                    parts = line.strip().split()
+                    for i, part in enumerate(parts):
+                        if part == 'inet' and i + 1 < len(parts):
+                            ip = parts[i + 1]
+                            if ip.startswith('addr:'):
+                                ip = ip[5:]  # Remove "addr:" prefix
+                            if not ip.startswith('127.'):
+                                external_ips.append(ip)
+                            break
+            if external_ips:
+                return external_ips
+    except Exception:
+        pass
+    
+    # Fall back to ip command (for non-Android Linux)
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            ips = re.findall(r'inet (\d+\.\d+\.\d+\.\d+)', result.stdout)
+            external_ips = [ip for ip in ips if not ip.startswith('127.')]
+    except Exception:
+        pass
+    
+    return external_ips
+
+
+def _run_llamacpp_worker(
+    bound_instance: BoundInstance,
+    event_sender: MpSender[Event],
+    task_receiver: MpReceiver[Task],
+    runner_id: Any,
+    shard_metadata: Any,
+    setup_start_time: float,
+) -> None:
+    """
+    Run as a distributed worker node (device_rank > 0).
+
+    Workers run an RPC server that the master node connects to for
+    distributed tensor operations. They don't load the model themselves.
+    """
+    import socket
+    from exo.worker.engines.llamacpp.rpc_server import RpcServerManager
+
+    instance = bound_instance.instance
+    if not isinstance(instance, LlamaCppInstance):
+        raise ValueError("Expected LlamaCppInstance for distributed worker")
+
+    rpc_port = instance.rpc_ports.get(bound_instance.bound_node_id, 0)
+    if rpc_port == 0:
+        raise ValueError(f"No RPC port assigned for worker node {bound_instance.bound_node_id}")
+
+    rpc_manager: RpcServerManager | None = None
+
+    current_status: RunnerStatus = RunnerWaitingForModel()
+    logger.info(f"Worker node (rank {shard_metadata.device_rank}) waiting for model")
+    logger.info(f"Worker will start RPC server on 0.0.0.0:{rpc_port}")
+    event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=current_status))
+
+    try:
+        with task_receiver as tasks:
+            for task in tasks:
+                event_sender.send(TaskStatusUpdated(task_id=task.task_id, task_status=TaskStatus.Running))
+                event_sender.send(TaskAcknowledged(task_id=task.task_id))
+
+                match task:
+                    case LoadModel() if isinstance(current_status, (RunnerWaitingForModel, RunnerFailed)):
+                        current_status = RunnerLoading()
+                        logger.info("=" * 60)
+                        logger.info(f"WORKER: Received LoadModel task (rank {shard_metadata.device_rank})")
+                        logger.info(f"WORKER: Starting RPC server on 0.0.0.0:{rpc_port}")
+                        logger.info("=" * 60)
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=current_status))
+
+                        rpc_manager = RpcServerManager.get_instance()
+                        if not rpc_manager.start(port=rpc_port):
+                            raise RuntimeError(f"Failed to start RPC server on port {rpc_port}")
+
+                        # Log external IPs for debugging
+                        external_ips = _get_external_ips()
+                        if external_ips:
+                            logger.info(f"Worker RPC server reachable on: {', '.join(f'{ip}:{rpc_port}' for ip in external_ips)}")
+                            
+                            # Verify we can connect to ourselves on external IP
+                            for ip in external_ips:
+                                try:
+                                    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                    test_sock.settimeout(2)
+                                    test_sock.connect((ip, rpc_port))
+                                    test_sock.close()
+                                    logger.info(f"Self-connectivity test PASSED: {ip}:{rpc_port}")
+                                except Exception as e:
+                                    logger.warning(f"Self-connectivity test FAILED for {ip}:{rpc_port}: {e}")
+                        else:
+                            logger.warning("Could not determine external IP addresses. Master may not be able to connect.")
+
+                        current_status = RunnerLoaded()
+                        logger.info("=" * 60)
+                        logger.info(f"WORKER: RPC server READY on port {rpc_port}")
+                        logger.info("=" * 60)
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=current_status))
+
+                    case StartWarmup() if isinstance(current_status, RunnerLoaded):
+                        current_status = RunnerWarmingUp()
+                        logger.info("Worker warming up (RPC server ready)")
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=current_status))
+
+                        logger.info(f"Worker initialized in {time.time() - setup_start_time} seconds")
+                        current_status = RunnerReady()
+                        logger.info("Worker ready (RPC server accepting connections)")
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=RunnerReady()))
+
+                    case ChatCompletion() if isinstance(current_status, RunnerReady):
+                        current_status = RunnerRunning()
+                        logger.info("Worker processing distributed inference request")
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=current_status))
+
+                        current_status = RunnerReady()
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=RunnerReady()))
+
+                    case Shutdown():
+                        logger.info("Worker shutting down")
+                        event_sender.send(TaskStatusUpdated(task_id=task.task_id, task_status=TaskStatus.Complete))
+                        break
+
+                    case _:
+                        raise ValueError("Received task outside of state machine")
+
+                event_sender.send(TaskStatusUpdated(task_id=task.task_id, task_status=TaskStatus.Complete))
+
+    finally:
+        if rpc_manager is not None:
+            rpc_manager.stop()
+
+    event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=RunnerShutdown()))
+
+
+def _run_llamacpp_master(
+    bound_instance: BoundInstance,
+    event_sender: MpSender[Event],
+    task_receiver: MpReceiver[Task],
+    runner_id: Any,
+    shard_metadata: Any,
+    setup_start_time: float,
+) -> None:
+    """
+    Run as the distributed master node (device_rank == 0).
+
+    The master runs llama-server with --rpc flag to connect to worker
+    RPC servers and distribute tensor operations across all nodes.
+    """
+    from exo.worker.engines.llamacpp.utils import (
+        DistributedLlamaServer,
+        build_rpc_address_list,
+        build_tensor_split_string,
+        get_gguf_path_for_instance,
+    )
+
+    distributed_server: DistributedLlamaServer | None = None
+
+    current_status: RunnerStatus = RunnerWaitingForModel()
+    logger.info(f"Master node (rank 0) waiting for model")
+    event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=current_status))
+
+    try:
+        with task_receiver as tasks:
+            for task in tasks:
+                logger.info(f"[MASTER] Received task: {type(task).__name__}, current_status={type(current_status).__name__}")
+                event_sender.send(TaskStatusUpdated(task_id=task.task_id, task_status=TaskStatus.Running))
+                event_sender.send(TaskAcknowledged(task_id=task.task_id))
+
+                match task:
+                    case LoadModel() if isinstance(current_status, (RunnerWaitingForModel, RunnerFailed)):
+                        current_status = RunnerLoading()
+                        logger.info("=" * 60)
+                        logger.info("MASTER: Received LoadModel task")
+                        logger.info("=" * 60)
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=current_status))
+
+                        # Log instance details for debugging
+                        instance = bound_instance.instance
+                        if isinstance(instance, LlamaCppInstance):
+                            logger.info(f"MASTER: Instance has {len(instance.hosts)} hosts")
+                            for i, h in enumerate(instance.hosts):
+                                logger.info(f"  Host[{i}]: {h.ip}:{h.port}")
+                            logger.info(f"MASTER: Instance rpc_ports: {instance.rpc_ports}")
+                            logger.info(f"MASTER: Instance tensor_split: {instance.tensor_split}")
+                            logger.info(f"MASTER: shard_assignments.node_to_runner: {dict(instance.shard_assignments.node_to_runner)}")
+                        
+                        gguf_path = get_gguf_path_for_instance(bound_instance)
+                        rpc_addresses = build_rpc_address_list(bound_instance)
+                        tensor_split = build_tensor_split_string(bound_instance)
+
+                        logger.info(f"MASTER: Final RPC addresses: '{rpc_addresses}'")
+                        logger.info(f"MASTER: Final tensor split: '{tensor_split}'")
+                        
+                        # Give workers time to receive their LoadModel tasks and start RPC servers
+                        # This helps with the race condition where master starts before workers
+                        if rpc_addresses:
+                            logger.info("MASTER: Waiting 10s for workers to start RPC servers...")
+                            time.sleep(10)
+
+                        distributed_server = DistributedLlamaServer(
+                            model_path=str(gguf_path),
+                            rpc_addresses=rpc_addresses,
+                            tensor_split=tensor_split,
+                        )
+
+                        if not distributed_server.start():
+                            raise RuntimeError("Failed to start distributed llama-server")
+
+                        current_status = RunnerLoaded()
+                        logger.info("Master distributed server loaded")
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=current_status))
+
+                    case StartWarmup() if isinstance(current_status, RunnerLoaded):
+                        current_status = RunnerWarmingUp()
+                        logger.info("Master warming up distributed inference")
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=current_status))
+
+                        logger.info(f"Master initialized in {time.time() - setup_start_time} seconds")
+                        current_status = RunnerReady()
+                        logger.info("Master ready for distributed inference")
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=RunnerReady()))
+
+                    case ChatCompletion(task_params=task_params, command_id=command_id) if isinstance(
+                        current_status, RunnerReady
+                    ):
+                        assert distributed_server is not None
+                        logger.info(f"Master received chat request: {str(task)[:500]}")
+                        current_status = RunnerRunning()
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=current_status))
+
+                        assert task_params.messages[0].content is not None
+                        _check_for_debug_prompts_llamacpp(task_params.messages[0].content)
+
+                        # Use the existing distributed server for generation
+                        from exo.worker.engines.llamacpp.llama_server import distributed_generate
+                        generator = distributed_generate(distributed_server.port, task_params)
+
+                        response_count = 0
+                        for response in generator:
+                            response_count += 1
+                            if isinstance(response, GenerationResponse):
+                                event_sender.send(
+                                    ChunkGenerated(
+                                        command_id=command_id,
+                                        chunk=TokenChunk(
+                                            idx=response.token,
+                                            model=shard_metadata.model_meta.model_id,
+                                            text=response.text,
+                                            token_id=response.token,
+                                            finish_reason=response.finish_reason,
+                                        ),
+                                    )
+                                )
+
+                        logger.info(f"Master generated {response_count} responses")
+                        current_status = RunnerReady()
+                        event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=RunnerReady()))
+
+                    case Shutdown():
+                        logger.info("Master shutting down")
+                        event_sender.send(TaskStatusUpdated(task_id=task.task_id, task_status=TaskStatus.Complete))
+                        break
+
+                    case _:
+                        logger.warning(f"[MASTER] Unhandled task {type(task).__name__} in state {type(current_status).__name__}")
+                        raise ValueError(f"Received task {type(task).__name__} outside of state machine (state={type(current_status).__name__})")
+
+                event_sender.send(TaskStatusUpdated(task_id=task.task_id, task_status=TaskStatus.Complete))
+
+    finally:
+        if distributed_server is not None:
+            distributed_server.stop()
 
     event_sender.send(RunnerStatusUpdated(runner_id=runner_id, runner_status=RunnerShutdown()))
 

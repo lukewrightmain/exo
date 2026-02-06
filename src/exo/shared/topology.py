@@ -9,6 +9,39 @@ from exo.shared.types.profiling import ConnectionProfile, NodePerformanceProfile
 from exo.shared.types.topology import Connection, NodeInfo
 
 
+def _normalize_cycle_order(
+    cycle: list[NodeInfo],
+    preferred_first: NodeId | None = None,
+) -> list[NodeInfo]:
+    """
+    Normalize cycle ordering to ensure consistent device_rank assignment.
+
+    Cycles from rustworkx.simple_cycles() have non-deterministic ordering based
+    on internal graph indexing. This causes different nodes to see different
+    orderings, leading to device_rank mismatches in distributed inference.
+
+    We normalize by:
+    1. If preferred_first is provided and in the cycle, that node becomes first
+    2. Otherwise, finding the node with the lexicographically smallest node_id
+    3. Rotating the cycle so that node is first (becomes device_rank=0)
+
+    For llama.cpp distributed inference, the EXO master node should be passed as
+    preferred_first so it becomes device_rank=0 (runs llama-server with --rpc).
+    """
+    if not cycle:
+        return cycle
+
+    # If a preferred node is specified and present in the cycle, use it
+    if preferred_first is not None:
+        for i, node in enumerate(cycle):
+            if node.node_id == preferred_first:
+                return cycle[i:] + cycle[:i]
+
+    # Fall back to lexicographically smallest node_id for determinism
+    min_idx = min(range(len(cycle)), key=lambda i: str(cycle[i].node_id))
+    return cycle[min_idx:] + cycle[:min_idx]
+
+
 class TopologySnapshot(BaseModel):
     nodes: list[NodeInfo]
     connections: list[Connection]
@@ -151,16 +184,20 @@ class Topology:
         self._graph.remove_edge_from_index(rx_idx)
         del self._edge_id_to_rx_id_map[connection]
 
-    def get_cycles(self) -> list[list[NodeInfo]]:
+    def get_cycles(
+        self, preferred_first: NodeId | None = None
+    ) -> list[list[NodeInfo]]:
         cycle_idxs = rx.simple_cycles(self._graph)
         cycles: list[list[NodeInfo]] = []
         for cycle_idx in cycle_idxs:
             cycle = [self._graph[idx] for idx in cycle_idx]
-            cycles.append(cycle)
+            cycles.append(_normalize_cycle_order(cycle, preferred_first))
 
         return cycles
 
-    def get_cycles_tb(self) -> list[list[NodeInfo]]:
+    def get_cycles_tb(
+        self, preferred_first: NodeId | None = None
+    ) -> list[list[NodeInfo]]:
         tb_edges = [
             (u, v, conn)
             for u, v, conn in self._graph.weighted_edge_list()
@@ -177,7 +214,7 @@ class Topology:
         cycles: list[list[NodeInfo]] = []
         for cycle_idx in cycle_idxs:
             cycle = [tb_graph[idx] for idx in cycle_idx]
-            cycles.append(cycle)
+            cycles.append(_normalize_cycle_order(cycle, preferred_first))
 
         return cycles
 

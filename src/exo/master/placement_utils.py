@@ -19,6 +19,9 @@ from exo.shared.types.worker.shards import (
 )
 
 
+RPC_BASE_PORT: int = 60000
+
+
 class NodeWithProfile(BaseModel):
     node_id: NodeId
     node_profile: NodePerformanceProfile
@@ -153,7 +156,91 @@ def get_shard_assignments(
             )
 
 
+def _is_valid_external_ip(ip: str) -> bool:
+    """Check if an IP address is a valid external (non-loopback) address."""
+    if not ip:
+        return False
+    if ip in ("127.0.0.1", "::1", "localhost", "0.0.0.0"):
+        return False
+    if ip.startswith("127."):
+        return False
+    # Skip IPv6 addresses (contain colons)
+    if ":" in ip:
+        return False
+    return True
+
+
+def _is_preferred_network_ip(ip: str) -> bool:
+    """Check if IP is on a preferred private network (10.x.x.x, 192.168.x.x, 172.16-31.x.x)."""
+    if not _is_valid_external_ip(ip):
+        return False
+    # Prefer private network ranges commonly used for local clusters
+    if ip.startswith("10."):
+        return True
+    if ip.startswith("192.168."):
+        return True
+    if ip.startswith("172."):
+        # Check for 172.16.0.0 - 172.31.255.255
+        try:
+            second_octet = int(ip.split(".")[1])
+            if 16 <= second_octet <= 31:
+                return True
+        except (ValueError, IndexError):
+            pass
+    return False
+
+
+def _get_external_ip_from_node_profile(node: NodeInfo) -> str | None:
+    """Extract the best external IP from a node's profile.
+    
+    Prefers:
+    1. wlan0 interface (WiFi on Android - most reliable for RPC)
+    2. Private network IPs (10.x, 192.168.x, 172.16-31.x)
+    3. Any valid external IP
+    """
+    if node.node_profile is None:
+        logger.warning(f"Node {node.node_id} has no profile, cannot get IP")
+        return None
+    
+    if not node.node_profile.network_interfaces:
+        logger.warning(f"Node {node.node_id} has no network interfaces in profile")
+        return None
+    
+    # Log all interfaces for debugging
+    logger.info(f"Node {node.node_id} network interfaces:")
+    for iface in node.node_profile.network_interfaces:
+        logger.info(f"  - {iface.name}: {iface.ip_address}")
+    
+    # PRIORITY 1: Look for wlan0 with valid IP (most reliable for Android RPC)
+    for interface in node.node_profile.network_interfaces:
+        if interface.name == "wlan0" and _is_valid_external_ip(interface.ip_address):
+            logger.info(f"Selected wlan0 IP {interface.ip_address} for node {node.node_id}")
+            return interface.ip_address
+    
+    # PRIORITY 2: Look for preferred private network IPs
+    for interface in node.node_profile.network_interfaces:
+        ip = interface.ip_address
+        if _is_preferred_network_ip(ip):
+            logger.info(f"Selected preferred IP {ip} from interface {interface.name} for node {node.node_id}")
+            return ip
+    
+    # PRIORITY 3: Any valid external IP
+    for interface in node.node_profile.network_interfaces:
+        ip = interface.ip_address
+        if _is_valid_external_ip(ip):
+            logger.info(f"Selected fallback IP {ip} from interface {interface.name} for node {node.node_id}")
+            return ip
+    
+    logger.warning(f"No valid external IP found for node {node.node_id}")
+    return None
+
+
 def get_hosts_from_subgraph(cycle_digraph: Topology) -> list[Host]:
+    """Get host addresses for nodes in the topology.
+    
+    Attempts to find real network IPs (not localhost) for each node.
+    Falls back to node profile IPs if connection topology only has localhost.
+    """
     cycles = cycle_digraph.get_cycles()
     expected_length = len(list(cycle_digraph.list_nodes()))
     cycles = [cycle for cycle in cycles if len(cycle) == expected_length]
@@ -176,6 +263,10 @@ def get_hosts_from_subgraph(cycle_digraph: Topology) -> list[Host]:
         current_node = cycle[i]
         next_node = cycle[(i + 1) % len(cycle)]
 
+        best_host: Host | None = None
+        fallback_port: int = 0
+        
+        # First try: find external IP from connection topology
         for connection in cycle_digraph.list_connections():
             if (
                 connection.local_node_id == current_node.node_id
@@ -184,13 +275,138 @@ def get_hosts_from_subgraph(cycle_digraph: Topology) -> list[Host]:
                 if get_thunderbolt and not connection.is_thunderbolt():
                     continue
                 assert connection.send_back_multiaddr is not None
+                ip = connection.send_back_multiaddr.ip_address
+                fallback_port = connection.send_back_multiaddr.port
+                
+                # Skip loopback addresses - prefer real network IPs
+                if not _is_valid_external_ip(ip):
+                    logger.debug(f"Skipping localhost IP {ip} from connection {current_node.node_id} -> {next_node.node_id}")
+                    continue
+                    
                 host = Host(
-                    ip=connection.send_back_multiaddr.ip_address,
+                    ip=ip,
                     port=connection.send_back_multiaddr.port,
                 )
-                hosts.append(host)
+                best_host = host
                 break
+        
+        # Second try: if no valid IP from connections, try node profile
+        if best_host is None:
+            external_ip = _get_external_ip_from_node_profile(next_node)
+            if external_ip:
+                logger.info(f"Using node profile IP {external_ip} for {next_node.node_id} (connection had localhost)")
+                best_host = Host(
+                    ip=external_ip,
+                    port=fallback_port if fallback_port else 52415,
+                )
+        
+        if best_host is not None:
+            hosts.append(best_host)
+        else:
+            logger.warning(f"Could not find valid external IP for node {next_node.node_id}")
 
+    return hosts
+
+
+def get_hosts_for_llamacpp(
+    selected_cycle: list[NodeInfo],
+    cycle_digraph: Topology,
+) -> list[Host]:
+    """Get host addresses specifically for llama.cpp distributed inference.
+    
+    For llama.cpp RPC, we need the IP addresses that the master (rank 0)
+    can use to reach each worker (rank > 0).
+    
+    This is CRITICAL for Android/Termux: we must use the real wlan0 IPs
+    from each device's node profile, NOT localhost or connection IPs.
+    
+    Returns a list of Host objects ordered by device_rank.
+    """
+    hosts: list[Host] = []
+    
+    if len(selected_cycle) <= 1:
+        return hosts
+    
+    master_node = selected_cycle[0]
+    
+    logger.info("=" * 70)
+    logger.info("LLAMA.CPP RPC HOST CONFIGURATION")
+    logger.info("=" * 70)
+    logger.info(f"Total nodes in cluster: {len(selected_cycle)}")
+    logger.info(f"Master node (rank 0): {master_node.node_id}")
+    
+    # Log all node profiles for debugging
+    logger.info("")
+    logger.info("[PROFILE] Collecting IPs from node profiles (ifconfig):")
+    node_profile_ips: dict[str, str] = {}
+    for i, node in enumerate(selected_cycle):
+        ip = _get_external_ip_from_node_profile(node)
+        if ip:
+            node_profile_ips[str(node.node_id)] = ip
+            role = "MASTER" if i == 0 else f"WORKER {i}"
+            logger.info(f"  [{role}] Node {str(node.node_id)[:12]}... -> IP: {ip}")
+        else:
+            logger.warning(f"  [WARN] Node {str(node.node_id)[:12]}... -> NO VALID IP FOUND!")
+    
+    # Also log connection topology for reference
+    all_connections = list(cycle_digraph.list_connections())
+    if all_connections:
+        logger.info("")
+        logger.info(f"[CONN] Connection topology ({len(all_connections)} connections):")
+        for conn in all_connections:
+            ip = conn.send_back_multiaddr.ip_address
+            is_localhost = ip.startswith("127.") or ip == "localhost"
+            status = "LOCALHOST (unusable)" if is_localhost else "external"
+            logger.info(f"  {str(conn.local_node_id)[:8]}... -> {str(conn.send_back_node_id)[:8]}... at {ip} ({status})")
+    
+    logger.info("")
+    logger.info("[BUILDING] RPC host list for llama-server --rpc flag:")
+    
+    for rank, node in enumerate(selected_cycle):
+        if rank == 0:
+            # Master doesn't need a host entry for RPC (it makes outgoing connections)
+            hosts.append(Host(ip="0.0.0.0", port=0))
+            logger.info(f"  Rank 0 (MASTER): N/A (master makes outgoing connections)")
+            continue
+        
+        # Find the IP the master can use to reach this worker
+        worker_ip: str | None = None
+        
+        # PRIORITY 1: Use node profile IP (most reliable for Android)
+        worker_ip = _get_external_ip_from_node_profile(node)
+        if worker_ip:
+            logger.info(f"  Rank {rank} (WORKER): {worker_ip}:{RPC_BASE_PORT} [from node profile]")
+        
+        # PRIORITY 2: Fall back to connection IP if no profile IP
+        if worker_ip is None:
+            for connection in all_connections:
+                if connection.send_back_node_id == node.node_id:
+                    ip = connection.send_back_multiaddr.ip_address
+                    if _is_valid_external_ip(ip):
+                        worker_ip = ip
+                        logger.info(f"  Rank {rank} (WORKER): {worker_ip}:{RPC_BASE_PORT} [from connection]")
+                        break
+        
+        if worker_ip is None:
+            logger.error(f"  Rank {rank} (WORKER): NO VALID IP! Node {node.node_id}")
+            logger.error("    Distributed inference WILL FAIL. Check that:")
+            logger.error("    1. Device is connected to WiFi (not mobile data)")
+            logger.error("    2. ifconfig returns a valid wlan0 IP")
+            logger.error("    3. Node profile was collected successfully")
+            worker_ip = "localhost"  # Fallback, will fail but lets us continue
+        
+        hosts.append(Host(ip=worker_ip, port=RPC_BASE_PORT))
+    
+    # Final summary
+    logger.info("")
+    logger.info("[SUMMARY] Final RPC configuration:")
+    rpc_workers = [f"{h.ip}:{h.port}" for h in hosts[1:] if h.ip != "0.0.0.0"]
+    if rpc_workers:
+        logger.info(f"  --rpc {','.join(rpc_workers)}")
+    else:
+        logger.error("  NO VALID WORKERS! Distributed inference will fail.")
+    logger.info("=" * 70)
+    
     return hosts
 
 
@@ -297,3 +513,74 @@ def get_mlx_ibv_coordinators(
     return {
         n.node_id: f"{get_ip_for_node(n)}:{coordinator_port}" for n in selected_cycle
     }
+
+
+def get_rpc_ports_for_llamacpp(
+    selected_cycle: list[NodeInfo],
+) -> dict[NodeId, int]:
+    """
+    Assign RPC ports for llama.cpp distributed inference.
+
+    Master node (device_rank 0) doesn't need an RPC port (it connects to others).
+    Worker nodes (device_rank > 0) all use the same RPC_BASE_PORT (60000) since
+    they are on different IPs.
+
+    Returns a dict mapping node_id to RPC port (0 for master node).
+    """
+    rpc_ports: dict[NodeId, int] = {}
+
+    for device_rank, node in enumerate(selected_cycle):
+        if device_rank == 0:
+            rpc_ports[node.node_id] = 0
+        else:
+            # All workers use the same port - they're on different IPs
+            rpc_ports[node.node_id] = RPC_BASE_PORT
+
+    return rpc_ports
+
+
+def get_tensor_split_for_llamacpp(
+    selected_cycle: list[NodeInfo],
+) -> list[float]:
+    """
+    Calculate tensor split ratios for llama.cpp distributed inference.
+
+    IMPORTANT: --tensor-split length must equal the number of RPC WORKERS only.
+    The master node (device_rank=0) is NOT included in the split - it runs
+    llama-server and distributes work to workers via --rpc flag.
+
+    For 3 nodes (1 master + 2 workers): returns [0.5, 0.5] (2 values)
+    For 4 nodes (1 master + 3 workers): returns [0.33, 0.33, 0.34] (3 values)
+
+    Returns a list of floats representing the fraction of layers for each WORKER.
+    For single-node instances, returns an empty list.
+    """
+    if len(selected_cycle) <= 1:
+        return []
+
+    # Workers only - skip master (first node, device_rank=0)
+    workers = selected_cycle[1:]
+    
+    if len(workers) == 0:
+        return []
+
+    if not narrow_all_nodes(selected_cycle):
+        # If any node doesn't have a profile, use equal split among workers
+        equal_ratio = 1.0 / len(workers)
+        return [round(equal_ratio, 4) for _ in workers]
+
+    # Calculate based on worker memory only
+    total_worker_memory = sum(
+        (node.node_profile.memory.ram_available.in_bytes for node in workers),
+    )
+
+    if total_worker_memory == 0:
+        equal_ratio = 1.0 / len(workers)
+        return [round(equal_ratio, 4) for _ in workers]
+
+    tensor_split: list[float] = []
+    for node in workers:
+        ratio = node.node_profile.memory.ram_available.in_bytes / total_worker_memory
+        tensor_split.append(round(ratio, 4))
+
+    return tensor_split
