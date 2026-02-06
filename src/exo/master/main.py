@@ -188,17 +188,13 @@ class Master:
                             )
                             generated_events.extend(transition_events)
                         case TaskFinished():
-                            generated_events.append(
-                                TaskDeleted(
-                                    task_id=self.command_task_mapping[
-                                        command.finished_command_id
-                                    ]
-                                )
+                            task_id = self.command_task_mapping.pop(
+                                command.finished_command_id, None
                             )
-                            if command.finished_command_id in self.command_task_mapping:
-                                del self.command_task_mapping[
-                                    command.finished_command_id
-                                ]
+                            if task_id is not None:
+                                generated_events.append(
+                                    TaskDeleted(task_id=task_id)
+                                )
                         case RequestEventLog():
                             # We should just be able to send everything, since other buffers will ignore old messages
                             for i in range(command.since_idx, len(self._event_log)):
@@ -207,7 +203,7 @@ class Master:
                                 )
                     for event in generated_events:
                         await self.event_sender.send(event)
-                except ValueError as e:
+                except Exception as e:
                     logger.opt(exception=e).warning("Error in command processor")
 
     # These plan loops are the cracks showing in our event sourcing architecture - more things could be commands
