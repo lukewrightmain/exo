@@ -22,22 +22,55 @@ def is_android() -> bool:
 
 async def get_friendly_name() -> str:
     """
-    Asynchronously gets the 'Computer Name' (friendly name) of a Mac.
-    e.g., "John's MacBook Pro"
-    Returns the name as a string, or None if an error occurs or not on macOS.
+    Get a human-friendly device name.
+    
+    - macOS: Uses "Computer Name" (e.g., "John's MacBook Pro")
+    - Android: Uses device model + IP suffix (e.g., "SM-F926U@193")
+    - Other: Uses hostname
     """
     hostname = socket.gethostname()
 
-    # TODO: better non mac support
-    if sys.platform != "darwin":  # 'darwin' is the platform name for macOS
-        return hostname
+    # Android/Termux: get device model and add IP suffix for uniqueness
+    if is_android():
+        return await _get_android_friendly_name()
 
+    # macOS: get Computer Name
+    if sys.platform == "darwin":
+        try:
+            process = await run_process(["scutil", "--get", "ComputerName"])
+            name = process.stdout.decode("utf-8", errors="replace").strip()
+            if name:
+                return name
+        except CalledProcessError:
+            pass
+
+    return hostname
+
+
+async def _get_android_friendly_name() -> str:
+    """Get a friendly name for Android devices using device model and IP suffix."""
+    model = "Android"
+    ip_suffix = ""
+    
+    # Try to get device model (e.g., "SM-F926U" for Samsung Galaxy Z Fold3)
     try:
-        process = await run_process(["scutil", "--get", "ComputerName"])
-    except CalledProcessError:
-        return hostname
-
-    return process.stdout.decode("utf-8", errors="replace").strip() or hostname
+        process = await run_process(["getprop", "ro.product.model"])
+        model_output = process.stdout.decode("utf-8", errors="replace").strip()
+        if model_output:
+            model = model_output
+    except (CalledProcessError, FileNotFoundError):
+        pass
+    
+    # Get IP suffix for uniqueness (last octet of wlan0 IP)
+    interfaces = get_network_interfaces()
+    for iface in interfaces:
+        if iface.name == "wlan0" and _is_valid_external_ip(iface.ip_address):
+            parts = iface.ip_address.split(".")
+            if len(parts) == 4:
+                ip_suffix = f"@{parts[3]}"
+            break
+    
+    return f"{model}{ip_suffix}"
 
 
 def _parse_ifconfig_output(output: str) -> list[NetworkInterfaceInfo]:
