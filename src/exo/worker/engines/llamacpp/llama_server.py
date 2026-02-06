@@ -101,7 +101,6 @@ class LlamaServerManager:
         
         # Check if process is still alive
         if self.process.poll() is not None:
-            self.process = None
             return False
         
         # Check if server responds to health check
@@ -174,7 +173,7 @@ class LlamaServerManager:
                     return True
                 
                 # Check if process died
-                if self.process.poll() is not None:
+                if self.process is not None and self.process.poll() is not None:
                     stderr = self.process.stderr.read().decode() if self.process.stderr else ""
                     logger.error(f"llama-server died during startup: {stderr[:500]}")
                     self.process = None

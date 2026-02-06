@@ -52,7 +52,9 @@ class LlamaCppInstance(BaseInstance):
     @property
     def is_distributed(self) -> bool:
         """Check if this instance uses distributed inference across multiple nodes."""
-        return len(self.rpc_ports) > 0 and len(self.tensor_split) > 1
+        # Distributed if there's at least one worker (tensor_split has >= 1 entry)
+        # and there are RPC ports assigned
+        return len(self.rpc_ports) > 0 and len(self.tensor_split) >= 1
 
 
 Instance = MlxRingInstance | MlxJacclInstance | LlamaCppInstance
