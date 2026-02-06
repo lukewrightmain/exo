@@ -719,19 +719,43 @@ function wrapLine(text: string, maxLen: number): string[] {
 					.attr('rx', 2);
 
 			} else {
-				// Default/Unknown - holographic hexagon
-				const hexRadius = nodeRadius * 0.6;
-				const hexPoints = Array.from({ length: 6 }, (_, i) => {
-					const angle = (i * 60 - 30) * Math.PI / 180;
-					return `${nodeInfo.x + hexRadius * Math.cos(angle)},${nodeInfo.y + hexRadius * Math.sin(angle)}`;
-				}).join(' ');
+				// Default/Unknown - phone-shaped rounded rectangle with memory fill
+				iconBaseWidth = nodeRadius * 0.9;
+				iconBaseHeight = nodeRadius * 1.3;
+				const phoneX = nodeInfo.x - iconBaseWidth / 2;
+				const phoneY = nodeInfo.y - iconBaseHeight / 2;
+				const phoneCornerRadius = 12;
 
-				// Main shape
-				nodeG.append('polygon')
-					.attr('points', hexPoints)
+				const phoneClipId = `phone-clip-${nodeInfo.id.replace(/[^a-zA-Z0-9]/g, '-')}`;
+				defs.append('clipPath')
+					.attr('id', phoneClipId)
+					.append('rect')
+					.attr('x', phoneX)
+					.attr('y', phoneY)
+					.attr('width', iconBaseWidth)
+					.attr('height', iconBaseHeight)
+					.attr('rx', phoneCornerRadius);
+
+				nodeG.append('rect')
+					.attr('x', phoneX)
+					.attr('y', phoneY)
+					.attr('width', iconBaseWidth)
+					.attr('height', iconBaseHeight)
+					.attr('rx', phoneCornerRadius)
 					.attr('fill', fillColor)
 					.attr('stroke', wireColor)
 					.attr('stroke-width', strokeWidth);
+
+				if (ramUsagePercent > 0) {
+					const memFillActualHeight = (ramUsagePercent / 100) * iconBaseHeight;
+					nodeG.append('rect')
+						.attr('x', phoneX)
+						.attr('y', phoneY + (iconBaseHeight - memFillActualHeight))
+						.attr('width', iconBaseWidth)
+						.attr('height', memFillActualHeight)
+						.attr('fill', 'rgba(96, 165, 250, 0.75)')
+						.attr('clip-path', `url(#${phoneClipId})`);
+				}
 			}
 
 			// --- Vertical GPU Bar (right side of icon) ---

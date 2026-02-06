@@ -51,14 +51,12 @@ async def _get_android_friendly_name() -> str:
     """
     Get a friendly name for Android devices.
     
-    Format: MODEL (SERIAL)@IP_SUFFIX
-    Example: SM-F926U (R3CRC0697RY)@073
+    Format: MODEL@FULL_IP
+    Example: SM-F926U@10.69.3.193
     """
     model = "Android"
-    serial = ""
     ip_suffix = ""
     
-    # Try to get device model (e.g., "SM-F926U" for Samsung Galaxy Z Fold3)
     try:
         process = await run_process(["getprop", "ro.product.model"])
         model_output = process.stdout.decode("utf-8", errors="replace").strip()
@@ -67,27 +65,12 @@ async def _get_android_friendly_name() -> str:
     except (CalledProcessError, FileNotFoundError):
         pass
     
-    # Try to get device serial number (e.g., "R3CRC0697RY")
-    try:
-        process = await run_process(["getprop", "ro.serialno"])
-        serial_output = process.stdout.decode("utf-8", errors="replace").strip()
-        if serial_output:
-            serial = serial_output
-    except (CalledProcessError, FileNotFoundError):
-        pass
-    
-    # Get IP suffix for uniqueness (last octet of wlan0 IP)
     interfaces = get_network_interfaces()
     for iface in interfaces:
         if iface.name == "wlan0" and _is_valid_external_ip(iface.ip_address):
-            parts = iface.ip_address.split(".")
-            if len(parts) == 4:
-                ip_suffix = f"@{parts[3]}"
+            ip_suffix = f"@{iface.ip_address}"
             break
     
-    # Build the friendly name: MODEL (SERIAL)@IP_SUFFIX
-    if serial:
-        return f"{model} ({serial}){ip_suffix}"
     return f"{model}{ip_suffix}"
 
 
