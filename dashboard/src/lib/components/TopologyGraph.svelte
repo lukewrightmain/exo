@@ -844,7 +844,7 @@ function wrapLine(text: string, maxLen: number): string[] {
 				const fontSize = Math.max(10, nodeRadius * 0.16);
 				
 				// Truncate name based on node count
-				const maxNameLen = numNodes === 1 ? 22 : (numNodes === 2 ? 18 : numNodes === 3 ? 16 : 14);
+				const maxNameLen = numNodes <= 2 ? 28 : (numNodes <= 4 ? 24 : 20);
 				const displayName = friendlyName.length > maxNameLen 
 					? friendlyName.slice(0, maxNameLen - 2) + '..'
 					: friendlyName;
@@ -885,8 +885,8 @@ function wrapLine(text: string, maxLen: number): string[] {
 				
 				// Very compact name below icon
 				const nameY = nodeInfo.y + iconBaseHeight / 2 + 9;
-				const shortName = friendlyName.length > 10 
-					? friendlyName.slice(0, 8) + '..'
+				const shortName = friendlyName.length > 16 
+					? friendlyName.slice(0, 14) + '..'
 					: friendlyName;
 				nodeG.append('text')
 					.attr('x', nodeInfo.x)
@@ -914,8 +914,8 @@ function wrapLine(text: string, maxLen: number): string[] {
 				
 				// Friendly name (shortened) above icon
 				const nameY = nodeInfo.y - iconBaseHeight / 2 - 8;
-				const shortName = friendlyName.length > 12 
-					? friendlyName.slice(0, 10) + '..'
+				const shortName = friendlyName.length > 16 
+					? friendlyName.slice(0, 14) + '..'
 					: friendlyName;
 				nodeG.append('text')
 					.attr('x', nodeInfo.x)
