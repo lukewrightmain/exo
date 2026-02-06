@@ -2,6 +2,8 @@
 
 from collections.abc import Mapping, Sequence
 
+from loguru import logger
+
 from exo.shared.types.common import NodeId
 from exo.shared.types.tasks import (
     ChatCompletion,
@@ -61,7 +63,12 @@ def _kill_runner(
 ) -> Shutdown | None:
     for runner in runners.values():
         runner_id = runner.bound_instance.bound_runner_id
-        if (instance_id := runner.bound_instance.instance.instance_id) not in instances:
+        instance_id = runner.bound_instance.instance.instance_id
+        if instance_id not in instances:
+            logger.warning(
+                f"[KILL_RUNNER] instance {str(instance_id)[:8]} gone from state. "
+                f"Known instances: {[str(k)[:8] for k in instances]}"
+            )
             return Shutdown(instance_id=instance_id, runner_id=runner_id)
 
         for (
@@ -70,7 +77,12 @@ def _kill_runner(
             if runner_id == global_runner_id:
                 continue
 
-            if isinstance(all_runners.get(global_runner_id, None), RunnerFailed):
+            peer_status = all_runners.get(global_runner_id, None)
+            if isinstance(peer_status, RunnerFailed):
+                logger.warning(
+                    f"[KILL_RUNNER] peer runner {str(global_runner_id)[:8]} is "
+                    f"RunnerFailed({peer_status.error_message})"
+                )
                 return Shutdown(
                     instance_id=instance_id,
                     runner_id=runner_id,
