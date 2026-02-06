@@ -48,8 +48,14 @@ async def get_friendly_name() -> str:
 
 
 async def _get_android_friendly_name() -> str:
-    """Get a friendly name for Android devices using device model and IP suffix."""
+    """
+    Get a friendly name for Android devices.
+    
+    Format: MODEL (SERIAL)@IP_SUFFIX
+    Example: SM-F926U (R3CRC0697RY)@073
+    """
     model = "Android"
+    serial = ""
     ip_suffix = ""
     
     # Try to get device model (e.g., "SM-F926U" for Samsung Galaxy Z Fold3)
@@ -58,6 +64,15 @@ async def _get_android_friendly_name() -> str:
         model_output = process.stdout.decode("utf-8", errors="replace").strip()
         if model_output:
             model = model_output
+    except (CalledProcessError, FileNotFoundError):
+        pass
+    
+    # Try to get device serial number (e.g., "R3CRC0697RY")
+    try:
+        process = await run_process(["getprop", "ro.serialno"])
+        serial_output = process.stdout.decode("utf-8", errors="replace").strip()
+        if serial_output:
+            serial = serial_output
     except (CalledProcessError, FileNotFoundError):
         pass
     
@@ -70,6 +85,9 @@ async def _get_android_friendly_name() -> str:
                 ip_suffix = f"@{parts[3]}"
             break
     
+    # Build the friendly name: MODEL (SERIAL)@IP_SUFFIX
+    if serial:
+        return f"{model} ({serial}){ip_suffix}"
     return f"{model}{ip_suffix}"
 
 

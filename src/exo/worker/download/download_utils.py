@@ -468,6 +468,47 @@ async def get_weight_map(repo_id: str, revision: str = "main") -> dict[str, str]
     return index_data.weight_map
 
 
+def _get_all_split_parts(selected_file: str, all_gguf_files: list[str]) -> list[str]:
+    """
+    Get all parts of a split GGUF file.
+    
+    Split GGUF files follow the pattern: model-XXXXX-of-YYYYY.gguf
+    Example: qwen2.5-coder-7b-instruct-q4_k_m-00001-of-00002.gguf
+    
+    If the selected file is part of a split, returns all parts.
+    Otherwise returns just the selected file.
+    """
+    import re
+    
+    # Pattern to match split GGUF files: -XXXXX-of-YYYYY.gguf
+    split_pattern = re.compile(r"^(.+)-(\d{5})-of-(\d{5})\.gguf$")
+    
+    match = split_pattern.match(selected_file)
+    if not match:
+        # Not a split file, return as-is
+        return [selected_file]
+    
+    base_name = match.group(1)
+    total_parts = int(match.group(3))
+    
+    # Find all parts with the same base name
+    all_parts: list[str] = []
+    for i in range(1, total_parts + 1):
+        expected_name = f"{base_name}-{i:05d}-of-{total_parts:05d}.gguf"
+        if expected_name in all_gguf_files:
+            all_parts.append(expected_name)
+        else:
+            logger.warning(f"Split GGUF part not found in repo: {expected_name}")
+    
+    if len(all_parts) != total_parts:
+        logger.warning(
+            f"Expected {total_parts} split parts but found {len(all_parts)}: {all_parts}"
+        )
+    
+    logger.info(f"Split GGUF detected: {selected_file} -> {len(all_parts)} parts")
+    return all_parts if all_parts else [selected_file]
+
+
 async def resolve_allow_patterns_for_gguf(
     repo_id: str, revision: str = "main", preferred_quant: str | None = None
 ) -> list[str]:
@@ -522,7 +563,13 @@ async def resolve_allow_patterns_for_gguf(
         preferred = gguf_files[0]
 
     logger.info(f"Selected GGUF file for {repo_id}: {preferred}")
-    return ["*.json", "*.txt", "tokenizer.model", preferred]
+    
+    # Handle split GGUF files (e.g., model-00001-of-00003.gguf)
+    # If the selected file is part of a split, include ALL parts
+    files_to_download = _get_all_split_parts(preferred, gguf_files)
+    
+    logger.info(f"GGUF files to download: {files_to_download}")
+    return ["*.json", "*.txt", "tokenizer.model", *files_to_download]
 
 
 async def resolve_allow_patterns(shard: ShardMetadata) -> list[str]:
