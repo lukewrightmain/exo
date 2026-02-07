@@ -137,15 +137,21 @@ class LlamaServerManager:
             self._kill_existing_server()
             time.sleep(1)
         
-        # Build command
         cmd = [
             str(self.server_path),
             "-m", model_path,
             "--port", str(self.port),
             "--host", SERVER_HOST,
-            "-c", "2048",  # Context size
-            "-t", "4",     # Threads
-            "--no-mmap",   # Important for Android
+            "-c", "2048",
+            "-t", "4",
+            "-tb", "6",
+            "-fa", "on",
+            "-b", "512",
+            "-ub", "256",
+            "--prio", "2",
+            "-ctk", "q8_0",
+            "-ctv", "q8_0",
+            "--no-mmap",
         ]
         
         # Set up environment

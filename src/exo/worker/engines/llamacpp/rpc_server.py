@@ -154,9 +154,6 @@ class RpcServerManager:
         env = os.environ.copy()
         if self.lib_path:
             env["LD_LIBRARY_PATH"] = self.lib_path
-        
-        # Enable RPC debug logging for troubleshooting distributed inference
-        env["GGML_RPC_DEBUG"] = "1"
 
         # Log prominent startup message with wlan0 IP
         logger.info("=" * 60)

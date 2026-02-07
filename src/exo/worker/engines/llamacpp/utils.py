@@ -659,6 +659,14 @@ class DistributedLlamaServer:
             "--port", str(self.port),
             "--host", "127.0.0.1",
             "-c", "1024",
+            "-t", "4",
+            "-tb", "6",
+            "-fa", "on",
+            "-b", "512",
+            "-ub", "256",
+            "--prio", "2",
+            "-ctk", "q8_0",
+            "-ctv", "q8_0",
             "--verbose",
         ]
 
@@ -668,16 +676,12 @@ class DistributedLlamaServer:
         if self.tensor_split:
             command.extend(["--tensor-split", self.tensor_split])
 
-        # Always disable mmap for distributed inference (critical for Android/Termux)
         command.append("--no-mmap")
 
         env = os.environ.copy()
         if self.lib_path:
             env["LD_LIBRARY_PATH"] = self.lib_path
-        
-        # Enable detailed debug logging for RPC and llama.cpp
-        env["GGML_RPC_DEBUG"] = "1"
-        env["LLAMA_LOG_VERBOSITY"] = "0"
+
         env["LLAMA_LOG_TIMESTAMPS"] = "1"
 
         logger.info(f"Starting llama-server with distributed inference...")
