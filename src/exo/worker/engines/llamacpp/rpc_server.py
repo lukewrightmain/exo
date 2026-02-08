@@ -139,11 +139,16 @@ class RpcServerManager:
         if not is_port_available(port, host):
             logger.warning(f"Port {port} not available, attempting to free it...")
             self._kill_existing_server()
-            time.sleep(1)
+            time.sleep(2)
 
             if not is_port_available(port, host):
-                logger.error(f"Port {port} still not available")
-                return False
+                logger.warning(f"Port {port} still busy after first attempt, retrying...")
+                self._kill_existing_server()
+                time.sleep(3)
+
+                if not is_port_available(port, host):
+                    logger.error(f"Port {port} still not available after retries")
+                    return False
 
         command = [
             str(self.server_path),
@@ -173,7 +178,6 @@ class RpcServerManager:
         
         logger.info(f"  Binding to: {host}:{port}")
         logger.info(f"Starting rpc-server: {' '.join(command)}")
-        logger.info(f"RPC debug logging enabled (GGML_RPC_DEBUG=1)")
 
         try:
             self.process = subprocess.Popen(
@@ -257,9 +261,10 @@ class RpcServerManager:
         logger.info("rpc-server stopped")
 
     def _kill_existing_server(self) -> None:
-        """Try to kill any existing rpc-server on the port."""
+        """Kill any process holding the RPC port, then all stale rpc-server procs."""
         try:
-            os.system(f"pkill -f 'rpc-server.*--port {self.port}'")
+            os.system(f"fuser -k {self.port}/tcp 2>/dev/null")
+            os.system("pkill -9 rpc-server 2>/dev/null")
         except Exception:
             pass
 
