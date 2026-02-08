@@ -49,13 +49,13 @@ def get_memory_profile() -> MemoryPerformanceProfile:
 async def start_polling_memory_metrics(
     callback: Callable[[MemoryPerformanceProfile], Coroutine[Any, Any, None]],
     *,
-    poll_interval_s: float = 0.5,
+    poll_interval_s: float = 5.0,
 ) -> None:
-    """Continuously poll and emit memory-only metrics at a faster cadence.
+    """Continuously poll and emit memory-only metrics.
 
     Parameters
     - callback: coroutine called with a fresh MemoryPerformanceProfile each tick
-    - poll_interval_s: interval between polls
+    - poll_interval_s: interval between polls (kept high to reduce gossip traffic)
     """
     while True:
         try:
@@ -70,7 +70,7 @@ async def start_polling_memory_metrics(
 async def start_polling_node_metrics(
     callback: Callable[[NodePerformanceProfile], Coroutine[Any, Any, None]],
 ):
-    poll_interval_s = 1.0
+    poll_interval_s = 10.0
     while True:
         try:
             metrics = await get_metrics_async()
