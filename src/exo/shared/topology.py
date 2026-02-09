@@ -185,18 +185,20 @@ class Topology:
         del self._edge_id_to_rx_id_map[connection]
 
     def get_cycles(
-        self, preferred_first: NodeId | None = None
+        self, preferred_first: NodeId | None = None, max_cycles: int = 10_000
     ) -> list[list[NodeInfo]]:
         cycle_idxs = rx.simple_cycles(self._graph)
         cycles: list[list[NodeInfo]] = []
         for cycle_idx in cycle_idxs:
             cycle = [self._graph[idx] for idx in cycle_idx]
             cycles.append(_normalize_cycle_order(cycle, preferred_first))
+            if len(cycles) >= max_cycles:
+                break
 
         return cycles
 
     def get_cycles_tb(
-        self, preferred_first: NodeId | None = None
+        self, preferred_first: NodeId | None = None, max_cycles: int = 10_000
     ) -> list[list[NodeInfo]]:
         tb_edges = [
             (u, v, conn)
@@ -215,6 +217,8 @@ class Topology:
         for cycle_idx in cycle_idxs:
             cycle = [tb_graph[idx] for idx in cycle_idx]
             cycles.append(_normalize_cycle_order(cycle, preferred_first))
+            if len(cycles) >= max_cycles:
+                break
 
         return cycles
 
