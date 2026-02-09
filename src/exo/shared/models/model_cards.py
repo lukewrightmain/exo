@@ -445,18 +445,34 @@ GGUF_MODEL_CARDS: dict[str, ModelCard] = {
             n_layers=28,
         ),
     ),
-    # Qwen3-Coder-Next - 80B MoE coding model (3B active), for distributed inference
+    # Qwen3-Coder-Next Q4_K_M — highest quality, needs 9+ phones with ample headroom
     "qwen3-coder-next-gguf": ModelCard(
         short_id="qwen3-coder-next-gguf",
         model_id=ModelId("unsloth/Qwen3-Coder-Next-GGUF"),
-        name="Qwen3 Coder Next 80B (GGUF IQ2_XXS)",
-        description="""Qwen3-Coder-Next - 80B MoE coding model with only 3B active params. Requires 3+ phones with 12GB RAM for distributed inference. Best for agentic coding tasks.""",
+        name="Qwen3 Coder Next 80B (GGUF Q4_K_M)",
+        description="""Qwen3-Coder-Next Q4_K_M — 80B MoE coding model, 48.5 GB. Requires 9+ phones with 12 GB RAM. Best quality but tight on memory.""",
         tags=["gguf", "distributed", "coding", "moe", "agent"],
         metadata=ModelMetadata(
             model_id=ModelId("unsloth/Qwen3-Coder-Next-GGUF"),
-            pretty_name="Qwen3 Coder Next (GGUF)",
-            storage_size=Memory.from_gb(26),
+            pretty_name="Qwen3 Coder Next Q4_K_M (GGUF)",
+            storage_size=Memory.from_gb(49),
             n_layers=48,
+            preferred_gguf_quant="Q4_K_M",
+        ),
+    ),
+    # Qwen3-Coder-Next Q3_K_M — best balance of quality vs. reliability for distributed inference
+    "qwen3-coder-next-q3km-gguf": ModelCard(
+        short_id="qwen3-coder-next-q3km-gguf",
+        model_id=ModelId("unsloth/Qwen3-Coder-Next-GGUF"),
+        name="Qwen3 Coder Next 80B (GGUF Q3_K_M)",
+        description="""Qwen3-Coder-Next Q3_K_M — 80B MoE coding model, 38.3 GB. Sweet spot for 7-9 phone clusters. Good quality with comfortable memory headroom.""",
+        tags=["gguf", "distributed", "coding", "moe", "agent"],
+        metadata=ModelMetadata(
+            model_id=ModelId("unsloth/Qwen3-Coder-Next-GGUF"),
+            pretty_name="Qwen3 Coder Next Q3_K_M (GGUF)",
+            storage_size=Memory.from_gb(39),
+            n_layers=48,
+            preferred_gguf_quant="Q3_K_M",
         ),
     ),
 }

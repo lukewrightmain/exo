@@ -577,7 +577,9 @@ async def resolve_allow_patterns(shard: ShardMetadata) -> list[str]:
     # GGUF models don't have model.safetensors.index.json - handle them differently
     if is_gguf_model(model_id):
         logger.info(f"Detected GGUF model: {model_id}")
-        return await resolve_allow_patterns_for_gguf(model_id)
+        return await resolve_allow_patterns_for_gguf(
+            model_id, preferred_quant=shard.model_meta.preferred_gguf_quant
+        )
     try:
         weight_map = await get_weight_map(model_id)
         return get_allow_patterns(weight_map, shard)
