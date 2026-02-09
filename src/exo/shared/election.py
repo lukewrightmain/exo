@@ -227,6 +227,7 @@ class Election:
                             f"Election message deferred (clock {message.clock}, loading)"
                         )
                         self._deferred_election_message = message
+                        self.suppress_elections()
                         continue
                     assert self._tg is not None
                     candidates: list[ElectionMessage] = [message]
@@ -262,6 +263,7 @@ class Election:
                         f"({len(peers_before)} -> {len(peers_after)} peers, "
                         f"{1 + len(rest)} messages absorbed)"
                     )
+                    self.suppress_elections()
                     continue
 
                 if peers_before == peers_after:
