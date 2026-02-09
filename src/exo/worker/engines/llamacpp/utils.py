@@ -21,7 +21,7 @@ from exo.worker.engines.llamacpp.constants import (
 from exo.worker.runner.bootstrap import logger
 
 
-DISTRIBUTED_SERVER_STARTUP_TIMEOUT: Final[int] = 3600  # 60 minutes for 7-node WiFi tensor transfer of large models
+DISTRIBUTED_SERVER_STARTUP_TIMEOUT: Final[int] = 5400  # 90 minutes: buffer for OOM-killed phones dropping out mid-load
 
 
 def is_android() -> bool:

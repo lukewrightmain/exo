@@ -93,10 +93,13 @@ class Election:
         # disconnect + reconnect of the same peer cancel each other out.
         self._connected_peers: set[NodeId] = set()
 
-        # Loading suppression: when set, connection-triggered elections are
-        # skipped entirely so that transient WiFi drops during the long model
-        # tensor transfer do not kill a loading worker.
-        self._suppress_connection_elections: bool = False
+        # Loading suppression: when set, both connection-triggered and
+        # election-message-triggered campaigns are deferred so that transient
+        # WiFi drops during the long model tensor transfer do not kill a
+        # loading worker.
+        self._suppress_elections: bool = False
+        self._suppress_resume_scope: CancelScope | None = None
+        self._deferred_election_message: ElectionMessage | None = None
 
     async def run(self):
         logger.info("Starting Election")
@@ -144,21 +147,64 @@ class Election:
             return
         self._tg.cancel_scope.cancel()
 
-    def suppress_connection_elections(self) -> None:
-        """Suppress connection-triggered elections (e.g. during model loading).
+    def suppress_elections(self, duration_seconds: float = 5400.0) -> None:
+        """Suppress all elections (connections and messages) during model loading.
 
-        While suppressed, transient gossip disconnects will not trigger
-        re-elections.  Election-message-triggered rounds still proceed
-        normally so that genuine leader proposals are not blocked.
+        Both ``_connection_receiver`` and ``_election_receiver`` honour this
+        flag.  Election messages that arrive while suppressed are deferred and
+        replayed when ``resume_elections`` is called (or when the auto-resume
+        timer fires after *duration_seconds*).
+
+        Each call resets the auto-resume timer.
         """
-        self._suppress_connection_elections = True
-        logger.info("Election: connection-triggered elections SUPPRESSED")
+        self._suppress_elections = True
 
-    def resume_connection_elections(self) -> None:
-        """Resume normal connection-triggered elections."""
-        if self._suppress_connection_elections:
-            self._suppress_connection_elections = False
-            logger.info("Election: connection-triggered elections RESUMED")
+        if self._suppress_resume_scope is not None:
+            self._suppress_resume_scope.cancel()
+            self._suppress_resume_scope = None
+
+        if self._tg is not None:
+            self._tg.start_soon(self._auto_resume, duration_seconds)
+
+        logger.info(
+            f"Election: all elections SUPPRESSED (auto-resume in {duration_seconds}s)"
+        )
+
+    def resume_elections(self) -> None:
+        """Resume normal elections and replay the highest deferred message."""
+        if not self._suppress_elections:
+            return
+
+        self._suppress_elections = False
+
+        if self._suppress_resume_scope is not None:
+            self._suppress_resume_scope.cancel()
+            self._suppress_resume_scope = None
+
+        deferred = self._deferred_election_message
+        self._deferred_election_message = None
+
+        if deferred is not None and self._tg is not None:
+            logger.info(
+                f"Election: replaying deferred message at clock {deferred.clock}"
+            )
+            candidates: list[ElectionMessage] = [deferred]
+            self._candidates = candidates
+            self._tg.start_soon(
+                self._campaign, candidates, DEFAULT_ELECTION_TIMEOUT
+            )
+
+        logger.info("Election: elections RESUMED")
+
+    async def _auto_resume(self, delay_seconds: float) -> None:
+        """Background timer that calls ``resume_elections`` after *delay_seconds*."""
+        scope = CancelScope()
+        self._suppress_resume_scope = scope
+        with scope:
+            await anyio.sleep(delay_seconds)
+        if not scope.cancel_called:
+            logger.info("Election: auto-resume timer fired")
+            self.resume_elections()
 
     def _apply_connection_message(self, message: ConnectionMessage) -> None:
         """Update the local connected-peers set from a single message."""
@@ -173,31 +219,26 @@ class Election:
                 logger.debug(f"Election message received: {message}")
                 if message.proposed_session.master_node_id == self.node_id:
                     logger.debug("Dropping message from ourselves")
-                    # Drop messages from us (See exo.routing.router)
                     continue
-                # If a new round is starting, we participate
                 if message.clock > self.clock:
                     self.clock = message.clock
-                    logger.debug(f"New clock: {self.clock}")
+                    if self._suppress_elections:
+                        logger.info(
+                            f"Election message deferred (clock {message.clock}, loading)"
+                        )
+                        self._deferred_election_message = message
+                        continue
                     assert self._tg is not None
-                    logger.debug("Starting new campaign")
                     candidates: list[ElectionMessage] = [message]
-                    logger.debug(f"Candidates: {candidates}")
-                    logger.debug(f"Current candidates: {self._candidates}")
                     self._candidates = candidates
-                    logger.debug(f"New candidates: {self._candidates}")
-                    logger.debug("Starting new campaign")
                     self._tg.start_soon(
                         self._campaign, candidates, DEFAULT_ELECTION_TIMEOUT
                     )
-                    logger.debug("Campaign started")
                     continue
-                # Dismiss old messages
                 if message.clock < self.clock:
                     logger.debug(f"Dropping old message: {message}")
                     continue
                 logger.debug(f"Election added candidate {message}")
-                # Now we are processing this rounds messages - including the message that triggered this round.
                 self._candidates.append(message)
 
     async def _connection_receiver(self) -> None:
@@ -215,7 +256,7 @@ class Election:
 
                 peers_after = frozenset(self._connected_peers)
 
-                if self._suppress_connection_elections:
+                if self._suppress_elections:
                     logger.info(
                         f"Election suppressed during model loading "
                         f"({len(peers_before)} -> {len(peers_after)} peers, "
