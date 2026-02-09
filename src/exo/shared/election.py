@@ -1,4 +1,4 @@
-from typing import Self
+from typing import Final, Self
 
 import anyio
 from anyio import (
@@ -10,13 +10,18 @@ from anyio import (
 from anyio.abc import TaskGroup
 from loguru import logger
 
-from exo.routing.connection_message import ConnectionMessage
+from exo.routing.connection_message import ConnectionMessage, ConnectionMessageType
 from exo.shared.types.commands import ForwarderCommand
 from exo.shared.types.common import NodeId, SessionId
 from exo.utils.channels import Receiver, Sender
 from exo.utils.pydantic_ext import CamelCaseModel
 
 DEFAULT_ELECTION_TIMEOUT = 3.0
+
+# Debounce window for connection-triggered elections.
+# Absorbs transient WiFi glitches: a disconnect followed by a reconnect
+# within this window is a no-op instead of a full re-election.
+CONNECTION_DEBOUNCE_SECONDS: Final[float] = 10.0
 
 
 class ElectionMessage(CamelCaseModel):
@@ -84,6 +89,15 @@ class Election:
         self._campaign_done: Event | None = None
         self._tg: TaskGroup | None = None
 
+        # Connection tracking: net-change filtering prevents elections when a
+        # disconnect + reconnect of the same peer cancel each other out.
+        self._connected_peers: set[NodeId] = set()
+
+        # Loading suppression: when set, connection-triggered elections are
+        # skipped entirely so that transient WiFi drops during the long model
+        # tensor transfer do not kill a loading worker.
+        self._suppress_connection_elections: bool = False
+
     async def run(self):
         logger.info("Starting Election")
         async with create_task_group() as tg:
@@ -130,6 +144,29 @@ class Election:
             return
         self._tg.cancel_scope.cancel()
 
+    def suppress_connection_elections(self) -> None:
+        """Suppress connection-triggered elections (e.g. during model loading).
+
+        While suppressed, transient gossip disconnects will not trigger
+        re-elections.  Election-message-triggered rounds still proceed
+        normally so that genuine leader proposals are not blocked.
+        """
+        self._suppress_connection_elections = True
+        logger.info("Election: connection-triggered elections SUPPRESSED")
+
+    def resume_connection_elections(self) -> None:
+        """Resume normal connection-triggered elections."""
+        if self._suppress_connection_elections:
+            self._suppress_connection_elections = False
+            logger.info("Election: connection-triggered elections RESUMED")
+
+    def _apply_connection_message(self, message: ConnectionMessage) -> None:
+        """Update the local connected-peers set from a single message."""
+        if message.connection_type is ConnectionMessageType.Connected:
+            self._connected_peers.add(message.node_id)
+        elif message.connection_type is ConnectionMessageType.Disconnected:
+            self._connected_peers.discard(message.node_id)
+
     async def _election_receiver(self) -> None:
         with self._em_receiver as election_messages:
             async for message in election_messages:
@@ -166,26 +203,44 @@ class Election:
     async def _connection_receiver(self) -> None:
         with self._cm_receiver as connection_messages:
             async for first in connection_messages:
-                # Delay after connection message for time to symmetrically setup
-                await anyio.sleep(0.2)
-                rest = connection_messages.collect()
+                peers_before = frozenset(self._connected_peers)
+                self._apply_connection_message(first)
 
-                logger.debug(
-                    f"Connection messages received: {first} followed by {rest}"
+                # Debounce: wait long enough for transient WiFi reconnects
+                # to cancel out the preceding disconnects.
+                await anyio.sleep(CONNECTION_DEBOUNCE_SECONDS)
+                rest = connection_messages.collect()
+                for message in rest:
+                    self._apply_connection_message(message)
+
+                peers_after = frozenset(self._connected_peers)
+
+                if self._suppress_connection_elections:
+                    logger.info(
+                        f"Election suppressed during model loading "
+                        f"({len(peers_before)} -> {len(peers_after)} peers, "
+                        f"{1 + len(rest)} messages absorbed)"
+                    )
+                    continue
+
+                if peers_before == peers_after:
+                    logger.debug(
+                        f"Connection debounce: no net topology change "
+                        f"({1 + len(rest)} messages cancelled out)"
+                    )
+                    continue
+
+                logger.info(
+                    f"Topology changed after debounce: "
+                    f"{len(peers_before)} -> {len(peers_after)} peers"
                 )
-                logger.debug(f"Current clock: {self.clock}")
-                # These messages are strictly peer to peer
                 self.clock += 1
-                logger.debug(f"New clock: {self.clock}")
                 assert self._tg is not None
                 candidates: list[ElectionMessage] = []
                 self._candidates = candidates
-                logger.debug("Starting new campaign")
                 self._tg.start_soon(
                     self._campaign, candidates, DEFAULT_ELECTION_TIMEOUT
                 )
-                logger.debug("Campaign started")
-                logger.debug("Connection message added")
 
     async def _command_counter(self) -> None:
         with self._co_receiver as commands:

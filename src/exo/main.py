@@ -174,6 +174,12 @@ class Node:
                         f"Node {result.session_id.master_node_id} elected master"
                     )
                 if result.is_new_master:
+                    # Suppress connection-triggered elections while the new
+                    # worker loads the model.  Transient WiFi drops during the
+                    # lengthy tensor transfer must not cause a re-election that
+                    # kills the loading worker and restarts from scratch.
+                    self.election.suppress_connection_elections()
+
                     await anyio.sleep(0)
                     if self.worker:
                         self.worker.shutdown()
@@ -195,6 +201,10 @@ class Node:
                     if self.api:
                         self.api.reset(result.session_id, result.won_clock)
                 else:
+                    # Stable re-confirmation of the same master: safe to
+                    # resume reacting to topology changes.
+                    self.election.resume_connection_elections()
+
                     if self.api:
                         self.api.unpause(result.won_clock)
 
