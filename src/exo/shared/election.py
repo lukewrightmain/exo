@@ -99,6 +99,7 @@ class Election:
         # loading worker.
         self._suppress_elections: bool = False
         self._suppress_resume_scope: CancelScope | None = None
+        self._delayed_suppress_scope: CancelScope | None = None
         self._deferred_election_message: ElectionMessage | None = None
 
     async def run(self):
@@ -169,6 +170,37 @@ class Election:
         logger.info(
             f"Election: all elections SUPPRESSED (auto-resume in {duration_seconds}s)"
         )
+
+    def suppress_elections_after_delay(
+        self, delay_seconds: float = 30.0, duration_seconds: float = 5400.0
+    ) -> None:
+        """Activate election suppression after a grace period.
+
+        The delay allows late-joining nodes to trigger elections and join the
+        cluster before suppression locks the topology for model loading.
+        Calling again before the delay fires cancels the pending activation.
+        """
+        if self._delayed_suppress_scope is not None:
+            self._delayed_suppress_scope.cancel()
+            self._delayed_suppress_scope = None
+
+        if self._tg is not None:
+            self._tg.start_soon(
+                self._delayed_suppress, delay_seconds, duration_seconds
+            )
+            logger.info(
+                f"Election: suppression scheduled in {delay_seconds}s"
+            )
+
+    async def _delayed_suppress(
+        self, delay_seconds: float, duration_seconds: float
+    ) -> None:
+        scope = CancelScope()
+        self._delayed_suppress_scope = scope
+        with scope:
+            await anyio.sleep(delay_seconds)
+        if not scope.cancel_called:
+            self.suppress_elections(duration_seconds)
 
     def resume_elections(self) -> None:
         """Resume normal elections and replay the highest deferred message."""

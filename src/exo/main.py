@@ -174,6 +174,7 @@ class Node:
                         f"Node {result.session_id.master_node_id} elected master"
                     )
                 if result.is_new_master:
+                    self.election.suppress_elections_after_delay()
                     await anyio.sleep(0)
                     if self.worker:
                         self.worker.shutdown()
