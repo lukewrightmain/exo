@@ -173,11 +173,6 @@ class Node:
                     logger.info(
                         f"Node {result.session_id.master_node_id} elected master"
                     )
-                # Clock 0 is the initial self-election before any peers are
-                # discovered.  Suppressing at that point would block the first
-                # real multi-node election from ever happening.
-                if result.won_clock > 0:
-                    self.election.suppress_elections()
                 if result.is_new_master:
                     await anyio.sleep(0)
                     if self.worker:
