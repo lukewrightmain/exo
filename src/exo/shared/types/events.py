@@ -1,4 +1,6 @@
 from datetime import datetime
+from enum import Enum
+from typing import Literal
 
 from pydantic import Field
 
@@ -11,6 +13,13 @@ from exo.shared.types.worker.downloads import DownloadProgress
 from exo.shared.types.worker.instances import Instance, InstanceId
 from exo.shared.types.worker.runners import RunnerId, RunnerStatus
 from exo.utils.pydantic_ext import CamelCaseModel, TaggedModel
+
+
+class MemoryPressureLevel(str, Enum):
+    """Memory pressure levels for health monitoring."""
+    OK = "ok"
+    WARNING = "warning"      # < 500MB available
+    CRITICAL = "critical"    # < 200MB available
 
 
 class EventId(Id):
@@ -101,6 +110,20 @@ class NodeDownloadProgress(BaseEvent):
     download_progress: DownloadProgress
 
 
+class NodeMemoryPressure(BaseEvent):
+    """
+    Emitted when a node detects memory pressure.
+
+    The master should react by:
+    - WARNING: Stop assigning new work to this node
+    - CRITICAL: Kill running instances and mark node as degraded
+    """
+    node_id: NodeId
+    level: MemoryPressureLevel
+    available_mb: int  # Current available memory in MB
+    when: str  # Timestamp when pressure was detected
+
+
 class ChunkGenerated(BaseEvent):
     command_id: CommandId
     chunk: GenerationChunk
@@ -130,6 +153,7 @@ Event = (
     | NodePerformanceMeasured
     | NodeMemoryMeasured
     | NodeDownloadProgress
+    | NodeMemoryPressure
     | ChunkGenerated
     | TopologyEdgeCreated
     | TopologyEdgeDeleted

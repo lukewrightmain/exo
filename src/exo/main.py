@@ -22,6 +22,10 @@ from exo.shared.types.common import NodeId, SessionId
 from exo.utils.channels import Receiver, channel
 from exo.utils.pydantic_ext import CamelCaseModel
 from exo.worker.download.impl_shard_downloader import exo_shard_downloader
+from exo.worker.engines.llamacpp.process_registry import (
+    cleanup_all_processes,
+    install_signal_handlers,
+)
 from exo.worker.main import Worker
 
 # Environment variable to enable local-only mode (no libp2p networking)
@@ -110,6 +114,7 @@ class Node:
     async def run(self):
         async with self._tg as tg:
             signal.signal(signal.SIGINT, lambda _, __: self.shutdown())
+            signal.signal(signal.SIGTERM, lambda _, __: self.shutdown())
             tg.start_soon(self.router.run)
             tg.start_soon(self.worker.run)
             tg.start_soon(self.election.run)
@@ -124,7 +129,12 @@ class Node:
         if self._tg.cancel_scope.cancel_called:
             import sys
 
+            # Ensure subprocess cleanup before hard exit
+            cleanup_all_processes()
             sys.exit(1)
+
+        # Clean up any llama.cpp subprocesses before cancelling tasks
+        cleanup_all_processes()
         self._tg.cancel_scope.cancel()
 
     async def _elect_loop(self):
@@ -207,6 +217,9 @@ def main():
     # TODO: Refactor the current verbosity system
     logger_setup(EXO_LOG, args.verbosity)
     logger.info("Starting EXO")
+
+    # Install signal handlers for subprocess cleanup
+    install_signal_handlers()
 
     node = anyio.run(Node.create, args)
     anyio.run(node.run)

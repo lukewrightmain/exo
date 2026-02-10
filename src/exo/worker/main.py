@@ -15,8 +15,10 @@ from exo.shared.types.events import (
     EventId,
     ForwarderEvent,
     IndexedEvent,
+    MemoryPressureLevel,
     NodeDownloadProgress,
     NodeMemoryMeasured,
+    NodeMemoryPressure,
     NodePerformanceMeasured,
     TaskCreated,
     TaskStatusUpdated,
@@ -52,6 +54,7 @@ from exo.worker.plan import plan
 from exo.worker.runner.runner_supervisor import RunnerSupervisor
 from exo.worker.utils import start_polling_memory_metrics, start_polling_node_metrics
 from exo.worker.utils.net_profile import check_reachable
+from exo.worker.utils.profile import get_memory_pressure, MemoryPressureLevel as ProfileMemoryPressureLevel
 
 
 class Worker:
@@ -133,6 +136,7 @@ class Worker:
             tg.start_soon(self._event_applier)
             tg.start_soon(self._forward_events)
             tg.start_soon(self._poll_connection_updates)
+            tg.start_soon(self._health_monitor)
 
         # Actual shutdown code - waits for all tasks to complete before executing.
         self.local_event_sender.close()
@@ -439,3 +443,72 @@ class Worker:
                     await self.event_sender.send(TopologyEdgeDeleted(edge=conn))
 
             await anyio.sleep(10)
+
+    async def _health_monitor(self) -> None:
+        """
+        Monitor system health and trigger graceful degradation.
+
+        Checks memory pressure every 5 seconds. On CRITICAL pressure,
+        shuts down runners to free memory before Android OOM killer does.
+        This prevents data corruption and allows graceful cluster recovery.
+        """
+        while True:
+            await anyio.sleep(5)
+
+            try:
+                pressure = get_memory_pressure()
+
+                if pressure == ProfileMemoryPressureLevel.CRITICAL:
+                    logger.critical(
+                        "Memory pressure CRITICAL - initiating graceful shutdown of runners"
+                    )
+
+                    # Get available memory for the event
+                    try:
+                        from exo.worker.utils.profile import get_android_available_memory
+                        available = get_android_available_memory()
+                        available_mb = int(available.in_mb)
+                    except Exception:
+                        available_mb = 0
+
+                    # Kill all runners to free memory
+                    for runner_id, runner in list(self.runners.items()):
+                        logger.warning(f"Shutting down runner {runner_id} due to memory pressure")
+                        try:
+                            runner.shutdown()
+                        except Exception as e:
+                            logger.error(f"Error shutting down runner {runner_id}: {e}")
+
+                    # Emit memory pressure event
+                    await self.event_sender.send(
+                        NodeMemoryPressure(
+                            node_id=self.node_id,
+                            level=MemoryPressureLevel.CRITICAL,
+                            available_mb=available_mb,
+                            when=str(datetime.now(tz=timezone.utc)),
+                        )
+                    )
+
+                elif pressure == ProfileMemoryPressureLevel.WARNING:
+                    logger.warning("Memory pressure WARNING - available memory low")
+
+                    # Get available memory for the event
+                    try:
+                        from exo.worker.utils.profile import get_android_available_memory
+                        available = get_android_available_memory()
+                        available_mb = int(available.in_mb)
+                    except Exception:
+                        available_mb = 0
+
+                    # Emit warning event (master can stop assigning new work)
+                    await self.event_sender.send(
+                        NodeMemoryPressure(
+                            node_id=self.node_id,
+                            level=MemoryPressureLevel.WARNING,
+                            available_mb=available_mb,
+                            when=str(datetime.now(tz=timezone.utc)),
+                        )
+                    )
+
+            except Exception as e:
+                logger.error(f"Health monitor error: {e}")

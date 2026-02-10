@@ -22,6 +22,10 @@ from loguru import logger
 
 from exo.shared.types.tasks import ChatCompletionTaskParams
 from exo.shared.types.worker.runner_response import GenerationResponse
+from exo.worker.engines.llamacpp.process_registry import (
+    register_process,
+    unregister_process,
+)
 
 
 # Server configuration
@@ -169,7 +173,10 @@ class LlamaServerManager:
                 stderr=subprocess.PIPE,
                 env=env,
             )
-            
+
+            # Register for automatic cleanup on Python exit
+            register_process(self.process)
+
             # Wait for server to be ready
             start_time = time.time()
             while time.time() - start_time < SERVER_STARTUP_TIMEOUT:
@@ -200,9 +207,12 @@ class LlamaServerManager:
         """Stop the llama-server."""
         if self.process is None:
             return
-        
+
         logger.info("Stopping llama-server...")
-        
+
+        # Unregister from cleanup registry first
+        unregister_process(self.process)
+
         try:
             self.process.terminate()
             self.process.wait(timeout=5)
@@ -210,7 +220,7 @@ class LlamaServerManager:
             logger.warning("Server didn't terminate gracefully, killing...")
             self.process.kill()
             self.process.wait()
-        
+
         self.process = None
         self.current_model = None
         logger.info("llama-server stopped")

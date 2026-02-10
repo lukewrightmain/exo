@@ -73,11 +73,23 @@ def place_instance(
     candidate_cycles = list(
         filter(lambda it: len(it) >= command.min_nodes, cycles + singleton_cycles)
     )
+
+    # Use runtime memory estimation with safety margins instead of storage size
+    # This accounts for loading overhead, KV cache, and Android LMK headroom
+    required_memory = command.model_meta.get_safe_memory_requirement(context_window=1024)
+    logger.info(
+        f"Memory requirement: storage={command.model_meta.storage_size.in_gb:.1f}GB, "
+        f"runtime={required_memory.in_gb:.1f}GB (with safety margin)"
+    )
+
     cycles_with_sufficient_memory = filter_cycles_by_memory(
-        candidate_cycles, command.model_meta.storage_size
+        candidate_cycles, required_memory
     )
     if not cycles_with_sufficient_memory:
-        raise ValueError("No cycles found with sufficient memory")
+        raise ValueError(
+            f"No cycles found with sufficient memory. "
+            f"Need {required_memory.in_gb:.1f}GB, check cluster capacity."
+        )
 
     smallest_cycles = get_smallest_cycles(cycles_with_sufficient_memory)
 

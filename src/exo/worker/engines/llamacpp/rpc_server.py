@@ -17,6 +17,12 @@ from typing import Final
 
 from loguru import logger
 
+from exo.worker.engines.llamacpp.process_registry import (
+    kill_stale_processes,
+    register_process,
+    unregister_process,
+)
+
 
 RPC_SERVER_STARTUP_TIMEOUT: Final[int] = 30
 DEFAULT_RPC_PORT: Final[int] = 60000
@@ -136,6 +142,9 @@ class RpcServerManager:
             logger.info("Stopping existing RPC server...")
             self.stop()
 
+        # Kill any stale processes from previous runs before starting
+        kill_stale_processes()
+
         if not is_port_available(port, host):
             logger.warning(f"Port {port} not available, attempting to free it...")
             self._kill_existing_server()
@@ -186,6 +195,9 @@ class RpcServerManager:
                 stderr=subprocess.PIPE,
                 env=env,
             )
+
+            # Register for automatic cleanup on Python exit
+            register_process(self.process)
 
             start_time = time.time()
             while time.time() - start_time < RPC_SERVER_STARTUP_TIMEOUT:
@@ -247,6 +259,9 @@ class RpcServerManager:
             return
 
         logger.info("Stopping rpc-server...")
+
+        # Unregister from cleanup registry first
+        unregister_process(self.process)
 
         try:
             self.process.terminate()

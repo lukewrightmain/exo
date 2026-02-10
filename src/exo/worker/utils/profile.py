@@ -1,6 +1,7 @@
 import asyncio
 import os
 import platform
+from enum import Enum
 from typing import Any, Callable, Coroutine
 
 import anyio
@@ -27,6 +28,87 @@ from .system_info import (
 )
 
 
+class MemoryPressureLevel(Enum):
+    """Memory pressure levels for health monitoring."""
+    OK = "ok"
+    WARNING = "warning"      # < 500MB available
+    CRITICAL = "critical"    # < 200MB available
+
+
+def get_android_available_memory() -> Memory:
+    """
+    Get available memory on Android using /proc/meminfo.
+
+    This is more accurate than psutil on Android/Termux because:
+    1. /proc/meminfo shows actual MemAvailable (includes reclaimable)
+    2. psutil may report incorrect values on some Android versions
+    3. We can apply Android-specific safety margins
+
+    Returns:
+        Memory object with available memory after safety margin
+    """
+    try:
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    # Format: "MemAvailable:    1234567 kB"
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        kb = int(parts[1])
+                        available = Memory.from_kb(kb)
+                        # Reserve 15% for Android Low Memory Killer
+                        safe_bytes = int(available.in_bytes * 0.85)
+                        return Memory.from_bytes(safe_bytes)
+    except (OSError, ValueError, IndexError) as e:
+        logger.debug(f"Failed to read /proc/meminfo: {e}")
+
+    # Fall back to psutil if /proc/meminfo fails
+    import psutil
+    vm = psutil.virtual_memory()
+    # Still apply safety margin
+    safe_bytes = int(vm.available * 0.85)
+    return Memory.from_bytes(safe_bytes)
+
+
+def get_memory_pressure() -> MemoryPressureLevel:
+    """
+    Check current memory pressure level.
+
+    Uses Android-specific memory detection when available.
+
+    Returns:
+        MemoryPressureLevel indicating system memory state
+    """
+    try:
+        available = get_android_available_memory()
+    except Exception:
+        # Fall back to psutil
+        import psutil
+        vm = psutil.virtual_memory()
+        available = Memory.from_bytes(vm.available)
+
+    if available.in_mb < 200:
+        return MemoryPressureLevel.CRITICAL
+    elif available.in_mb < 500:
+        return MemoryPressureLevel.WARNING
+    return MemoryPressureLevel.OK
+
+
+def is_android() -> bool:
+    """Check if running on Android (Termux)."""
+    # Check common Android indicators
+    if os.path.exists("/data/data/com.termux"):
+        return True
+    if "ANDROID_ROOT" in os.environ:
+        return True
+    if "TERMUX_VERSION" in os.environ:
+        return True
+    # Check for Android-specific paths
+    if os.path.exists("/system/build.prop"):
+        return True
+    return False
+
+
 async def get_metrics_async() -> Metrics | None:
     """Return detailed Metrics on macOS or a minimal fallback elsewhere."""
 
@@ -35,13 +117,34 @@ async def get_metrics_async() -> Metrics | None:
 
 
 def get_memory_profile() -> MemoryPerformanceProfile:
-    """Construct a MemoryPerformanceProfile using psutil"""
+    """
+    Construct a MemoryPerformanceProfile.
+
+    Uses Android-specific memory detection when running on Android/Termux
+    for more accurate available memory reporting.
+    """
     override_memory_env = os.getenv("OVERRIDE_MEMORY_MB")
     override_memory: int | None = (
         Memory.from_mb(int(override_memory_env)).in_bytes
         if override_memory_env
         else None
     )
+
+    # On Android, use /proc/meminfo for more accurate readings
+    if override_memory is None and is_android():
+        try:
+            android_available = get_android_available_memory()
+            import psutil
+            vm = psutil.virtual_memory()
+            sm = psutil.swap_memory()
+            return MemoryPerformanceProfile.from_bytes(
+                ram_total=vm.total,
+                ram_available=android_available.in_bytes,
+                swap_total=sm.total,
+                swap_available=sm.free,
+            )
+        except Exception as e:
+            logger.debug(f"Android memory detection failed, using psutil: {e}")
 
     return MemoryPerformanceProfile.from_psutil(override_memory=override_memory)
 
