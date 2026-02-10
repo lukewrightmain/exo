@@ -19,10 +19,10 @@ class ModelMetadata(CamelCaseModel):
 
     # Runtime memory estimation fields
     # During model loading, memory usage spikes above final loaded size
-    loading_overhead_factor: float = 1.20  # 20% overhead during load
+    loading_overhead_factor: float = 1.10  # 10% overhead during load
 
     # Reserve memory for Android Low Memory Killer to prevent OOM kills
-    android_safety_margin: float = 0.15  # Reserve 15% for Android system
+    android_safety_margin: float = 0.10  # Reserve 10% for Android system
 
     # KV cache memory per token (estimated from model config)
     # For large models: typically 256-512 bytes per token per layer
