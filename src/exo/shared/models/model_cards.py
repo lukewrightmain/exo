@@ -475,6 +475,112 @@ GGUF_MODEL_CARDS: dict[str, ModelCard] = {
             preferred_gguf_quant="Q3_K_M",
         ),
     ),
+    # =========================================================================
+    # LARGE PUBLIC MODELS - No authentication required
+    # =========================================================================
+    # Llama 3.3 70B - Meta's latest 70B instruction-tuned model
+    "llama-3.3-70b-q4km-gguf": ModelCard(
+        short_id="llama-3.3-70b-q4km-gguf",
+        model_id=ModelId("bartowski/Llama-3.3-70B-Instruct-GGUF"),
+        name="Llama 3.3 70B (GGUF Q4_K_M)",
+        description="""Meta Llama 3.3 70B Q4_K_M — 42GB. Excellent general-purpose model, great for 7-9 phone clusters.""",
+        tags=["gguf", "distributed", "general", "instruct"],
+        metadata=ModelMetadata(
+            model_id=ModelId("bartowski/Llama-3.3-70B-Instruct-GGUF"),
+            pretty_name="Llama 3.3 70B Q4_K_M (GGUF)",
+            storage_size=Memory.from_gb(42),
+            n_layers=80,
+            preferred_gguf_quant="Q4_K_M",
+        ),
+    ),
+    "llama-3.3-70b-q3km-gguf": ModelCard(
+        short_id="llama-3.3-70b-q3km-gguf",
+        model_id=ModelId("bartowski/Llama-3.3-70B-Instruct-GGUF"),
+        name="Llama 3.3 70B (GGUF Q3_K_M)",
+        description="""Meta Llama 3.3 70B Q3_K_M — 34GB. Good quality with comfortable memory headroom for 6-9 phone clusters.""",
+        tags=["gguf", "distributed", "general", "instruct"],
+        metadata=ModelMetadata(
+            model_id=ModelId("bartowski/Llama-3.3-70B-Instruct-GGUF"),
+            pretty_name="Llama 3.3 70B Q3_K_M (GGUF)",
+            storage_size=Memory.from_gb(34),
+            n_layers=80,
+            preferred_gguf_quant="Q3_K_M",
+        ),
+    ),
+    # Mixtral 8x7B - Fast MoE model, good for coding and general tasks
+    "mixtral-8x7b-q4km-gguf": ModelCard(
+        short_id="mixtral-8x7b-q4km-gguf",
+        model_id=ModelId("TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF"),
+        name="Mixtral 8x7B (GGUF Q4_K_M)",
+        description="""Mistral's Mixtral 8x7B MoE — 26GB. Fast inference, works great on 4-6 phones.""",
+        tags=["gguf", "distributed", "moe", "fast"],
+        metadata=ModelMetadata(
+            model_id=ModelId("TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF"),
+            pretty_name="Mixtral 8x7B Q4_K_M (GGUF)",
+            storage_size=Memory.from_gb(26),
+            n_layers=32,
+            preferred_gguf_quant="Q4_K_M",
+        ),
+    ),
+    # DeepSeek Coder 33B - Excellent coding model
+    "deepseek-coder-33b-q4km-gguf": ModelCard(
+        short_id="deepseek-coder-33b-q4km-gguf",
+        model_id=ModelId("TheBloke/deepseek-coder-33B-instruct-GGUF"),
+        name="DeepSeek Coder 33B (GGUF Q4_K_M)",
+        description="""DeepSeek Coder 33B Q4_K_M — 20GB. Excellent coding model, fits on 3-5 phones.""",
+        tags=["gguf", "distributed", "coding"],
+        metadata=ModelMetadata(
+            model_id=ModelId("TheBloke/deepseek-coder-33B-instruct-GGUF"),
+            pretty_name="DeepSeek Coder 33B Q4_K_M (GGUF)",
+            storage_size=Memory.from_gb(20),
+            n_layers=62,
+            preferred_gguf_quant="Q4_K_M",
+        ),
+    ),
+    # Qwen2.5 72B - Large general purpose model
+    "qwen2.5-72b-q4km-gguf": ModelCard(
+        short_id="qwen2.5-72b-q4km-gguf",
+        model_id=ModelId("Qwen/Qwen2.5-72B-Instruct-GGUF"),
+        name="Qwen 2.5 72B (GGUF Q4_K_M)",
+        description="""Qwen 2.5 72B Q4_K_M — 44GB. Powerful general-purpose model for 7-9 phone clusters.""",
+        tags=["gguf", "distributed", "general"],
+        metadata=ModelMetadata(
+            model_id=ModelId("Qwen/Qwen2.5-72B-Instruct-GGUF"),
+            pretty_name="Qwen 2.5 72B Q4_K_M (GGUF)",
+            storage_size=Memory.from_gb(44),
+            n_layers=80,
+            preferred_gguf_quant="Q4_K_M",
+        ),
+    ),
+    "qwen2.5-72b-q3km-gguf": ModelCard(
+        short_id="qwen2.5-72b-q3km-gguf",
+        model_id=ModelId("Qwen/Qwen2.5-72B-Instruct-GGUF"),
+        name="Qwen 2.5 72B (GGUF Q3_K_M)",
+        description="""Qwen 2.5 72B Q3_K_M — 36GB. Great quality with good headroom for 6-9 phone clusters.""",
+        tags=["gguf", "distributed", "general"],
+        metadata=ModelMetadata(
+            model_id=ModelId("Qwen/Qwen2.5-72B-Instruct-GGUF"),
+            pretty_name="Qwen 2.5 72B Q3_K_M (GGUF)",
+            storage_size=Memory.from_gb(36),
+            n_layers=80,
+            preferred_gguf_quant="Q3_K_M",
+        ),
+    ),
+    # Qwen2.5 Coder 32B - Strong coding model
+    "qwen2.5-coder-32b-q4km-gguf": ModelCard(
+        short_id="qwen2.5-coder-32b-q4km-gguf",
+        model_id=ModelId("Qwen/Qwen2.5-Coder-32B-Instruct-GGUF"),
+        name="Qwen 2.5 Coder 32B (GGUF Q4_K_M)",
+        description="""Qwen 2.5 Coder 32B Q4_K_M — 20GB. Strong coding model, fits on 3-5 phones.""",
+        tags=["gguf", "distributed", "coding"],
+        metadata=ModelMetadata(
+            model_id=ModelId("Qwen/Qwen2.5-Coder-32B-Instruct-GGUF"),
+            pretty_name="Qwen 2.5 Coder 32B Q4_K_M (GGUF)",
+            storage_size=Memory.from_gb(20),
+            n_layers=64,
+            preferred_gguf_quant="Q4_K_M",
+        ),
+    ),
 }
 
 # Combined model cards - currently GGUF only for Android focus
